@@ -1,0 +1,15 @@
+{
+  "name": "business-calendar",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Персональный календарь на каждый день — офлайновое PWA",
+  "type": "module",
+  "scripts": {
+    "test:dates": "node tests/test_dates.mjs --all-zones",
+    "test:app": "node tests/test_app.mjs",
+    "serve": "python -m http.server 8000 --directory docs"
+  },
+  "devDependencies": {
+    "playwright": "^1.62.1"
+  }
+}

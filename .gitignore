@@ -1,0 +1,23 @@
+# Временные файлы и исходники данных — в репозиторий не попадают
+.tmp/
+*.xlsx
+
+# Google OAuth
+credentials.json
+token.json
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# ОС
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Node
+node_modules/
+package-lock.json

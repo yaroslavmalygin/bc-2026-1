@@ -1,0 +1,543 @@
+/*
+ * Бизнес-календарь — оформление.
+ *
+ * Опорная идея композиции: весь день обязан помещаться в один экран телефона
+ * без вертикального скролла. Поэтому каркас — вертикальный флекс на 100dvh
+ * с фиксированными полосами сверху и снизу, а строки дня делят остаток
+ * высоты между собой. Всё, что раньше толкало страницу вниз (расшифровка
+ * букв, прогноз месяца, легенда, выбор даты), живёт в шторках.
+ */
+
+:root {
+  color-scheme: light dark;
+
+  --ground:    #E9E9F0;
+  --surface:   #FFFFFF;
+  --raised:    #F5F5FA;
+  --line:      #DEDEE9;
+  --line-soft: #ECECF3;
+  --ink:       #14151C;
+  --ink-2:     #4E5162;
+  --ink-3:     #83869A;
+  --accent:    #4E44B8;
+  --accent-bg: #EAE8FA;
+  --good:      #3F8B4C;
+  --neutral:   #A8801A;
+  --bad:       #B23B33;
+  --good-t:    rgba(63,139,76,.10);
+  --neutral-t: rgba(168,128,26,.11);
+  --bad-t:     rgba(178,59,51,.10);
+  --moon-lit:  #3A3D52;
+  --moon-dark: #D3D4E0;
+  --sky:       #E2E3EE;
+  --scrim:     rgba(20,21,28,.42);
+  --shadow-lg: 0 2px 6px rgba(20,21,28,.06), 0 24px 60px rgba(20,21,28,.16);
+
+  --display: "Cormorant Garamond", Georgia, serif;
+  --ui: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+
+  --z-bar: 10;
+  --z-scrim: 30;
+  --z-sheet: 40;
+  --z-rotate: 60;
+  --z-curtain: 70;
+
+  --r-sm: 9px;
+  --r-md: 13px;
+  --r-lg: 20px;
+
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ground:    #08090E;
+    --surface:   #131520;
+    --raised:    #1C1F2C;
+    --line:      #262A3A;
+    --line-soft: #1E2130;
+    --ink:       #EDEEF6;
+    --ink-2:     #A0A4B8;
+    --ink-3:     #6C7085;
+    --accent:    #A99CFA;
+    --accent-bg: #241F3E;
+    --good:      #5FB56E;
+    --neutral:   #CFA93F;
+    --bad:       #DE6459;
+    --good-t:    rgba(95,181,110,.13);
+    --neutral-t: rgba(207,169,63,.13);
+    --bad-t:     rgba(222,100,89,.14);
+    --moon-lit:  #F1EEE3;
+    --moon-dark: #23273A;
+    --sky:       #0E1018;
+    --scrim:     rgba(0,0,0,.62);
+    --shadow-lg: 0 2px 6px rgba(0,0,0,.5), 0 28px 70px rgba(0,0,0,.6);
+  }
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;              /* страница не скроллится ни в каком случае */
+  background: var(--surface);
+  color: var(--ink);
+  font-family: var(--ui);
+  font-size: 16px;
+  -webkit-font-smoothing: antialiased;
+  -webkit-tap-highlight-color: transparent;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  border: none;
+  background: none;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+[hidden] { display: none !important; }
+
+/* ====================== Каркас ====================== */
+
+.app {
+  height: 100dvh;                /* не vh: он врёт из-за адресной строки */
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  overflow: hidden;
+  padding-top: var(--safe-top);
+  padding-bottom: var(--safe-bottom);
+}
+
+/* ---------- Шапка ---------- */
+
+.topbar {
+  flex: 0 0 auto;
+  padding: 10px 14px 8px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  z-index: var(--z-bar);
+}
+
+.bar-date { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.bar-dow {
+  font-size: 10.5px; letter-spacing: .14em; text-transform: uppercase;
+  color: var(--ink-3); font-weight: 640;
+}
+.bar-day {
+  font-family: var(--display); font-size: 21px; line-height: 1.05;
+  font-variant-numeric: tabular-nums; letter-spacing: -.005em;
+}
+
+.bar-actions { display: flex; align-items: center; gap: 7px; }
+
+/* Все кнопки-иконки не меньше 44×44 — требование к тач-целям */
+.icon-btn {
+  width: 44px; height: 44px; border-radius: 12px;
+  border: 1px solid var(--line); background: var(--raised);
+  display: grid; place-items: center;
+  transition: background-color .18s ease, border-color .18s ease;
+}
+.icon-btn:hover { background: var(--accent-bg); border-color: var(--accent-bg); }
+.icon-btn svg {
+  width: 20px; height: 20px; stroke: var(--ink-2); fill: none;
+  stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round;
+}
+.icon-btn:hover svg { stroke: var(--accent); }
+
+.pill-today {
+  height: 44px; padding: 0 15px; border-radius: 12px;
+  background: var(--accent); color: #fff; font-size: 13.5px; font-weight: 600;
+  display: none; place-items: center; white-space: nowrap;
+}
+.pill-today.on { display: grid; }
+
+/* ---------- Плашки состояния ---------- */
+
+.banners { flex: 0 0 auto; display: flex; flex-direction: column; gap: 5px; padding: 0 14px; }
+.banners:empty { display: none; }
+
+.banner {
+  display: flex; align-items: center; gap: 9px;
+  padding: 7px 11px; border-radius: var(--r-sm);
+  font-size: 12.5px; line-height: 1.35;
+  border: 1px solid transparent;
+}
+.banner-info { background: var(--accent-bg); color: var(--accent); }
+.banner-warn { background: var(--neutral-t); color: var(--neutral); border-color: var(--neutral-t); }
+.banner-error { background: var(--bad-t); color: var(--bad); }
+.banner button {
+  margin-left: auto; font-size: 12.5px; font-weight: 620;
+  color: inherit; text-decoration: underline; white-space: nowrap;
+  min-height: 24px; padding: 0 2px;
+}
+
+/* ---------- Лунная полоса ---------- */
+
+.moonbar {
+  flex: 0 0 auto; margin: 6px 14px 8px; padding: 10px 13px;
+  border-radius: var(--r-md); background: var(--sky);
+  border: 1px solid var(--line-soft);
+  display: grid; grid-template-columns: 40px 1fr; align-items: center; gap: 13px;
+}
+/* Ни рамок, ни заливок по состоянию: акцентом отмечается только заголовок
+   и только в сам день события. */
+.moonbar.is-event .moon-title { color: var(--accent); }
+
+.moon-disc { width: 40px; height: 40px; display: block; }
+.moon-copy { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.moon-title {
+  font-family: var(--display); font-size: 18.5px; line-height: 1.15;
+  letter-spacing: -.005em;
+}
+.moon-sub { font-size: 11.5px; color: var(--ink-3); line-height: 1.35; }
+
+/* ---------- Колода дней ---------- */
+
+.deck {
+  flex: 1 1 auto; min-height: 0;
+  display: flex;
+  overflow-x: auto; overflow-y: hidden;
+  scroll-snap-type: x mandatory;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+}
+.deck::-webkit-scrollbar { display: none; }
+
+/* На десктопе колода таскается мышью: браузер сам этого не умеет */
+@media (hover: hover) and (pointer: fine) {
+  .deck { cursor: grab; }
+  .deck.dragging { cursor: grabbing; scroll-snap-type: none; scroll-behavior: auto; }
+  .deck.dragging .row { pointer-events: none; }
+}
+
+.card {
+  flex: 0 0 100%;
+  scroll-snap-align: center;
+  scroll-snap-stop: always;
+  min-width: 0;
+  padding: 0 14px;
+  display: flex; flex-direction: column;
+  gap: clamp(3px, .8vh, 8px);
+}
+
+/* ---------- Строки дня ---------- */
+
+.row {
+  flex: 1 1 0;
+  min-height: 42px;
+  display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 10px;
+  padding: 0 10px 0 13px;
+  border: 1px solid transparent; border-radius: var(--r-sm);
+  background: var(--raised);
+  text-align: left; width: 100%;
+  transition: border-color .18s ease, transform .18s ease;
+}
+.row:hover { border-color: var(--line); }
+.row:active { transform: scale(.985); }
+.row[data-c="good"]    { background: var(--good-t); }
+.row[data-c="neutral"] { background: var(--neutral-t); }
+.row[data-c="bad"]     { background: var(--bad-t); }
+
+.row-label {
+  font-size: 14px; font-weight: 520; line-height: 1.2;
+  letter-spacing: -.005em;
+  overflow: hidden; text-overflow: ellipsis;
+}
+
+.chip {
+  min-width: 38px; height: 34px; padding: 0 8px; border-radius: 8px;
+  display: grid; place-items: center;
+  font-size: 14.5px; font-weight: 700; letter-spacing: -.02em;
+  color: #fff; font-variant-numeric: tabular-nums;
+}
+.chip[data-c="good"]    { background: var(--good); }
+.chip[data-c="neutral"] { background: var(--neutral); color: #16130A; }
+.chip[data-c="bad"]     { background: var(--bad); }
+.chip[data-c="none"]    { background: transparent; border: 1.5px dashed var(--line); }
+@media (prefers-color-scheme: dark) {
+  .chip[data-c="neutral"] { color: #16130A; }
+}
+
+/* Незаполненный месяц: строки августа не показываются ни при каких условиях */
+.empty-month {
+  flex: 1 1 auto;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 10px; text-align: center; padding: 20px;
+  color: var(--ink-3);
+}
+.empty-month svg {
+  width: 34px; height: 34px; stroke: var(--ink-3); fill: none;
+  stroke-width: 1.4; stroke-linecap: round;
+}
+.empty-month p { margin: 0; font-size: 14px; line-height: 1.5; max-width: 26ch; }
+
+/* ---------- Нижняя панель ---------- */
+
+.bottombar {
+  flex: 0 0 auto; margin: 8px 14px 12px; padding: 5px;
+  border-radius: var(--r-md); background: var(--raised);
+  border: 1px solid var(--line-soft);
+  display: grid; grid-template-columns: 44px 1fr 44px; align-items: center; gap: 5px;
+  z-index: var(--z-bar);
+}
+.nav-btn {
+  width: 44px; height: 44px; border-radius: 9px;
+  display: grid; place-items: center;
+  transition: background-color .18s ease;
+}
+.nav-btn:hover { background: var(--surface); }
+.nav-btn svg {
+  width: 19px; height: 19px; stroke: var(--ink-2); fill: none;
+  stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round;
+}
+.nav-btn[disabled] { opacity: .3; cursor: default; }
+
+.fc-btn {
+  height: 44px; border-radius: 9px;
+  border: 1px solid var(--line); background: var(--surface);
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+  padding: 0 12px;
+  font-size: 13.5px; font-weight: 580; letter-spacing: -.005em; color: var(--ink);
+  transition: background-color .18s ease, border-color .18s ease;
+  min-width: 0;
+}
+.fc-btn:hover { background: var(--accent-bg); border-color: var(--accent); color: var(--accent); }
+.fc-btn[disabled] { opacity: .45; cursor: default; }
+.fc-btn svg {
+  fill: none; stroke: currentColor; stroke-width: 1.6;
+  stroke-linecap: round; stroke-linejoin: round; flex: 0 0 auto;
+}
+.fc-ico { width: 17px; height: 17px; opacity: .75; }
+.fc-chev { width: 15px; height: 15px; opacity: .55; }
+.fc-label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* ====================== Шторки ====================== */
+
+.scrim {
+  position: absolute; inset: 0; background: var(--scrim);
+  z-index: var(--z-scrim);
+  opacity: 0; pointer-events: none; transition: opacity .24s ease;
+}
+.scrim.on { opacity: 1; pointer-events: auto; }
+
+.sheet {
+  position: absolute; left: 0; right: 0; bottom: 0;
+  max-height: 88%;
+  background: var(--surface);
+  border-top: 1px solid var(--line);
+  border-radius: var(--r-lg) var(--r-lg) 0 0;
+  z-index: var(--z-sheet);
+  display: flex; flex-direction: column;
+  transform: translateY(101%);
+  transition: transform .3s cubic-bezier(.32,.72,0,1);
+  box-shadow: var(--shadow-lg);
+  padding-bottom: var(--safe-bottom);
+}
+.sheet.on { transform: translateY(0); }
+
+.sheet-head {
+  flex: 0 0 auto; padding: 16px 16px 12px;
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  border-bottom: 1px solid var(--line-soft);
+}
+.sheet-head h2 {
+  margin: 0; font-family: var(--display); font-weight: 600;
+  font-size: 23px; letter-spacing: -.01em;
+}
+
+/* У шторок собственный скролл: прогноз месяца бывает длинным */
+.sheet-body {
+  flex: 1 1 auto; overflow-y: auto; -webkit-overflow-scrolling: touch;
+  padding: 16px; display: flex; flex-direction: column; gap: 20px;
+}
+
+.grabber {
+  position: absolute; top: 7px; left: 50%; transform: translateX(-50%);
+  width: 36px; height: 4px; border-radius: 2px; background: var(--line);
+}
+
+/* ---------- Легенда ---------- */
+
+.leg-group { display: flex; flex-direction: column; gap: 9px; }
+.leg-title {
+  font-size: 10.5px; letter-spacing: .14em; text-transform: uppercase;
+  color: var(--ink-3); font-weight: 660;
+}
+.leg-item { display: grid; grid-template-columns: 40px 1fr; gap: 12px; align-items: start; }
+.leg-item p { margin: 0; font-size: 13px; line-height: 1.5; color: var(--ink-2); }
+.leg-item p b { color: var(--ink); font-weight: 640; }
+.swatch { width: 40px; height: 28px; border-radius: 7px; }
+.swatch[data-c="good"] { background: var(--good); }
+.swatch[data-c="neutral"] { background: var(--neutral); }
+.swatch[data-c="bad"] { background: var(--bad); }
+.swatch[data-c="none"] { background: transparent; border: 1.5px dashed var(--line); }
+.leg-char {
+  width: 40px; height: 28px; border-radius: 7px;
+  background: var(--raised); border: 1px solid var(--line);
+  display: grid; place-items: center; font-weight: 700; font-size: 14px;
+}
+.leg-char svg { width: 20px; height: 20px; }
+
+.meta-block {
+  border-top: 1px solid var(--line-soft); padding-top: 14px;
+  display: flex; flex-direction: column; gap: 4px;
+  font-size: 12.5px; color: var(--ink-3); line-height: 1.5;
+}
+.meta-block b { color: var(--ink-2); font-weight: 600; }
+
+/* ---------- Выбор даты ---------- */
+
+.cal-nav { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.cal-month { font-family: var(--display); font-size: 21px; letter-spacing: -.005em; }
+.cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 5px; }
+.cal-dow {
+  text-align: center; font-size: 10px; letter-spacing: .1em; text-transform: uppercase;
+  color: var(--ink-3); font-weight: 640; padding-bottom: 3px;
+}
+.cal-dow.we { color: var(--bad); }
+
+.cal-cell {
+  aspect-ratio: 1; border-radius: 10px;
+  border: 1px solid transparent; background: var(--raised);
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 1px; font-size: 14.5px; font-variant-numeric: tabular-nums;
+  transition: background-color .18s ease, border-color .18s ease;
+}
+.cal-cell:hover { border-color: var(--accent); }
+.cal-cell.empty { background: transparent; pointer-events: none; }
+.cal-cell.we { color: var(--bad); }
+.cal-cell.today { background: var(--accent); color: #fff; font-weight: 700; }
+.cal-cell.sel { border-color: var(--accent); border-width: 2px; }
+.cal-cell.not-ready { opacity: .42; }
+.cal-cell.out { opacity: .25; pointer-events: none; }
+.cal-cell .cal-moon { width: 11px; height: 11px; display: block; }
+
+.cal-legend {
+  display: flex; gap: 14px; flex-wrap: wrap;
+  font-size: 11.5px; color: var(--ink-3);
+}
+.cal-legend span { display: inline-flex; align-items: center; gap: 5px; }
+.cal-dot { width: 11px; height: 11px; border-radius: 50%; display: inline-block; }
+.cal-dot-today { background: var(--accent); }
+.cal-dot-moon { background: var(--moon-lit); border: 1px solid var(--line); }
+.cal-dot-empty { background: var(--raised); border: 1px solid var(--line); opacity: .5; }
+
+/* ---------- Прогноз и подробности ---------- */
+
+.prose {
+  font-family: var(--display); font-size: 16.5px; line-height: 1.62;
+  color: var(--ink-2); margin: 0;
+}
+.detail-head { display: flex; align-items: center; gap: 12px; }
+.detail-chip {
+  min-width: 46px; height: 44px; padding: 0 10px; border-radius: 10px;
+  display: grid; place-items: center; font-size: 18px; font-weight: 700; color: #fff;
+}
+.detail-verdict { display: flex; flex-direction: column; gap: 2px; }
+.detail-verdict .v { font-size: 15.5px; font-weight: 620; }
+.detail-verdict .n { font-size: 12px; color: var(--ink-3); }
+.detail-list { display: flex; flex-direction: column; gap: 11px; }
+.detail-list p { margin: 0; font-size: 13.5px; line-height: 1.55; color: var(--ink-2); }
+.detail-list p b { color: var(--ink); font-weight: 700; }
+
+/* ====================== Поворот экрана ====================== */
+
+.rotate-overlay {
+  position: fixed; inset: 0; z-index: var(--z-rotate);
+  background: var(--surface);
+  display: none; flex-direction: column; align-items: center; justify-content: center;
+  gap: 14px; text-align: center; padding: 24px;
+}
+.rotate-overlay svg {
+  width: 46px; height: 46px; stroke: var(--accent); fill: none;
+  stroke-width: 1.5; stroke-linecap: round;
+}
+.rotate-overlay p { margin: 0; font-size: 15px; color: var(--ink-2); }
+
+/*
+ * Приложение рассчитано только на portrait. В landscape календарь НЕ
+ * перестраивается горизонтально — вместо растянутой вёрстки показывается
+ * просьба повернуть телефон. Порог по высоте отсекает десктоп, где
+ * «альбомная» ориентация нормальна.
+ */
+@media (orientation: landscape) and (max-height: 520px) {
+  .rotate-overlay { display: flex; }
+}
+
+/* ====================== Экраны состояния ====================== */
+
+.curtain {
+  position: absolute; inset: 0; z-index: var(--z-curtain);
+  background: var(--surface);
+  display: flex; align-items: center; justify-content: center; padding: 28px;
+}
+.curtain[hidden] { display: none; }
+
+.curtain-inner {
+  display: flex; flex-direction: column; align-items: center; gap: 12px;
+  text-align: center; max-width: 32ch;
+}
+.curtain-icon svg {
+  width: 40px; height: 40px; stroke: var(--ink-3); fill: none;
+  stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round;
+}
+.curtain-title {
+  margin: 0; font-family: var(--display); font-weight: 600; font-size: 26px;
+  letter-spacing: -.01em;
+}
+.curtain-text { margin: 0; font-size: 14px; line-height: 1.55; color: var(--ink-2); }
+.curtain-btn {
+  margin-top: 6px; min-height: 44px; padding: 0 22px; border-radius: 12px;
+  background: var(--accent); color: #fff; font-size: 14.5px; font-weight: 600;
+}
+
+/* ====================== Компактный режим ====================== */
+/*
+ * Если высоты не хватает (маленький экран, крупный системный шрифт,
+ * Display Zoom), информация не обрезается — сжимаются отступы и типографика.
+ * Внутренний скролл области строк остаётся крайней мерой и включается из
+ * скрипта классом .cramped.
+ */
+
+@media (max-height: 700px) {
+  .moonbar { padding: 8px 12px; margin: 4px 14px 6px; }
+  .moon-title { font-size: 17px; }
+  .bar-day { font-size: 19px; }
+  .chip { height: 30px; min-width: 34px; }
+  .row { min-height: 38px; }
+}
+
+@media (max-height: 620px) {
+  .topbar { padding: 6px 14px 4px; }
+  .moon-disc { width: 32px; height: 32px; }
+  .moonbar { grid-template-columns: 32px 1fr; gap: 10px; }
+  .moon-sub { font-size: 11px; }
+  .bottombar { margin: 6px 14px 8px; }
+  .row-label { font-size: 13.5px; }
+}
+
+.app.cramped .deck { overflow-y: hidden; }
+.app.cramped .card { overflow-y: auto; }
+.app.cramped .row { flex: 0 0 auto; min-height: 44px; }
+
+/* ====================== Движение ====================== */
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    transition-duration: .01ms !important;
+    animation-duration: .01ms !important;
+  }
+  .deck { scroll-behavior: auto !important; }
+}
