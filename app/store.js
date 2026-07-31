@@ -14,9 +14,13 @@
  * При ошибке на любом шаге хранилище не меняется вообще.
  */
 
+import { CLIENT_ID } from "./client-id.js";
 import { validateCalendar } from "./validate.js";
 
-const DB_NAME = "business-calendar";
+// Имя базы содержит идентификатор клиента: IndexedDB делится по origin,
+// и без него два календаря на одном устройстве писали бы в одну базу.
+// Запасной путь через localStorage разводится сам — lsKey строит ключ отсюда.
+const DB_NAME = `business-calendar-${CLIENT_ID}`;
 const DB_VERSION = 1;
 const STORE = "data";
 const KEY_CURRENT = "current";

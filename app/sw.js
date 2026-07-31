@@ -12,7 +12,19 @@
  */
 
 const APP_CACHE_VERSION = "v1";
-const CACHE_NAME = `calendar-shell-${APP_CACHE_VERSION}`;
+
+// Тот же вывод идентификатора, что в client-id.js. Дублируется намеренно:
+// sw.js — классический воркер, ESM-импорт здесь недоступен без
+// type: "module" при регистрации, а его не держат старые iOS.
+function clientIdFrom(href) {
+  const path = new URL("./", href).pathname;
+  const segment = path.split("/").filter(Boolean).pop();
+  return segment || "local";
+}
+
+const CLIENT_ID = clientIdFrom(self.location.href);
+const CACHE_PREFIX = `calendar-${CLIENT_ID}-shell-`;
+const CACHE_NAME = CACHE_PREFIX + APP_CACHE_VERSION;
 
 // Пути относительные: сайт живёт в подкаталоге, абсолютные увели бы в корень
 // домена и всё сломали.
@@ -24,6 +36,7 @@ const PRECACHE = [
   "./app.js",
   "./dates.js",
   "./moon.js",
+  "./client-id.js",
   "./store.js",
   "./validate.js",
   "./manifest.webmanifest",
@@ -52,7 +65,9 @@ self.addEventListener("activate", (event) => {
       const names = await caches.keys();
       await Promise.all(
         names
-          .filter((n) => n.startsWith("calendar-shell-") && n !== CACHE_NAME)
+          // Только СВОИ прошлые версии. Общий префикс calendar-shell- снёс бы
+          // офлайн-оболочку остальных клиентов: кэши общие на весь origin.
+          .filter((n) => n.startsWith(CACHE_PREFIX) && n !== CACHE_NAME)
           .map((n) => caches.delete(n)),
       );
       await self.clients.claim();
@@ -74,13 +89,15 @@ self.addEventListener("fetch", (event) => {
 
   event.respondWith(
     (async () => {
-      const cached = await caches.match(request, { ignoreSearch: true });
+      // Ищем в СВОЁМ кэше, а не по всем сразу: caches.match() без имени
+      // обходит хранилище всего origin и мог бы отдать файл другого клиента.
+      const cache = await caches.open(CACHE_NAME);
+      const cached = await cache.match(request, { ignoreSearch: true });
       if (cached) return cached;
 
       try {
         const response = await fetch(request);
         if (response.ok && response.type === "basic") {
-          const cache = await caches.open(CACHE_NAME);
           cache.put(request, response.clone());
         }
         return response;
@@ -88,7 +105,7 @@ self.addEventListener("fetch", (event) => {
         // Навигационный запрос без сети — отдаём оболочку из кэша,
         // дальше приложение само решит, что показать.
         if (request.mode === "navigate") {
-          const shell = await caches.match("./index.html");
+          const shell = await cache.match("./index.html");
           if (shell) return shell;
         }
         throw new Error("ресурс недоступен офлайн");
