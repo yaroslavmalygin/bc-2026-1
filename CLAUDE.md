@@ -263,4 +263,5 @@ Landscape не поддерживается намеренно: показыва
 [workflows/update_calendar_data.md](workflows/update_calendar_data.md).
 
 Заведён один клиент — `01`. Как завести следующего:
-[workflows/add_client.md](workflows/add_client.md).
+[workflows/add_client.md](workflows/add_client.md). Каким должен быть файл от
+астролога — [workflows/xlsx_checklist.md](workflows/xlsx_checklist.md).
