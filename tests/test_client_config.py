@@ -15,6 +15,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
 
+import calendar_config as cfg_mod
 from client_config import ClientConfig, ClientConfigError, load_client
 from console import BOLD, RESET, fail, head, info, ok
 
@@ -139,6 +140,26 @@ def _():
         assert "client-broken.json" in str(exc), exc
         return
     raise AssertionError("ожидалась ошибка разбора")
+
+
+@case("эталонная книга строится по конфигу и даёт нужное число блоков")
+def _():
+    from make_reference_xlsx import build
+    from openpyxl import load_workbook
+    # Блоки ищем логикой самого конвертера: заголовок месяца продублирован
+    # в строках дней недели и дат, и наивный подсчёт совпадений дал бы втрое
+    # больше блоков, чем их есть.
+    from xlsx_to_calendar_json import find_blocks
+
+    client = load_client(ROOT / "tests" / "fixtures" / "client-test.json")
+    WORK.mkdir(parents=True, exist_ok=True)
+    path = WORK / "ref-from-config.xlsx"
+    build(path, client, mode="demo")
+
+    wb = load_workbook(path)
+    ws = wb[cfg_mod.CALENDAR_SHEET_CANDIDATES[0]]
+    blocks = find_blocks(ws)
+    assert len(blocks) == client.expected_months, f"блоков {len(blocks)}"
 
 
 def main():

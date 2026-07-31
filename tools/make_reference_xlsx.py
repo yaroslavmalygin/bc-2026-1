@@ -12,9 +12,12 @@
               двенадцать блоков — пустые сетки с плейсхолдером в заметке.
               Именно так выглядит таблица прямо сейчас.
 
-  --demo      все тринадцать месяцев заполнены синтетическими, но
+  --demo      все месяцы диапазона заполнены синтетическими, но
               правдоподобными данными. Нужен, чтобы отлаживать приложение
-              на полном годе: 396 дней, полный набор фаз луны.
+              на полном годе: полный набор фаз луны.
+
+Диапазон и набор строк книга берёт из конфига клиента (--client), а не из
+собственных констант: у разных клиентов они разные, см. tools/client_config.py.
 
 Августовские буквы (О, ОХ, КУ, Ф+, Р+, у, В, Т) взяты из настоящей таблицы
 один в один. Цвета — провизорные, см. PROVISIONAL_PALETTE в calendar_config.
@@ -34,7 +37,8 @@ from openpyxl.utils import get_column_letter
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import calendar_config as cfg
-import console  # noqa: F401  — переключает stdout в UTF-8
+from client_config import ClientConfigError, load_client
+from console import fail
 
 
 # ---------------------------------------------------------------------------
@@ -182,11 +186,14 @@ CENTER = Alignment(horizontal="center", vertical="center")
 # Генерация синтетического месяца
 # ---------------------------------------------------------------------------
 
-def synth_month(year, month, rng):
+def synth_month(year, month, rng, client):
     """Правдоподобные, но выдуманные данные для демо-режима."""
     n = calendar.monthrange(year, month)[1]
     colors, marks = {}, {}
 
+    # Буквы привязаны к смыслу строки, а строки у клиента свои. Незнакомая
+    # строка получает только заливки: выдумать ей буквы означало бы
+    # проставить символ, которого нет в каталоге астролога.
     row_marks = {
         "negotiations": ["О", "Х", "ОХ"],
         "finance": ["У", "К", "КУ"],
@@ -198,7 +205,7 @@ def synth_month(year, month, rng):
         "massage": ["В", "Т"],
     }
 
-    for row in cfg.ROW_DEFS:
+    for row in client.rows:
         rid = row["id"]
         col, mrk = {}, {}
         day = 1
@@ -211,7 +218,7 @@ def synth_month(year, month, rng):
         if rid == "massage":
             for d in range(1, n + 1):
                 mrk[d] = "Т" if d % 29 < 15 else "В"
-        elif row_marks[rid]:
+        elif row_marks.get(rid):
             for d in range(1, n + 1):
                 if rng.random() < 0.22:
                     mrk[d] = rng.choice(row_marks[rid])
@@ -235,7 +242,7 @@ def august_colors_by_day():
 # Запись блока месяца
 # ---------------------------------------------------------------------------
 
-def write_month_block(ws, top, year, month, colors, marks, note, ready, moon_by_day):
+def write_month_block(ws, top, year, month, colors, marks, note, ready, moon_by_day, client):
     n = calendar.monthrange(year, month)[1]
     last_col = cfg.COL_FIRST_DAY + n - 1
 
@@ -278,7 +285,7 @@ def write_month_block(ws, top, year, month, colors, marks, note, ready, moon_by_
             c_dt.fill = FILL_WEEKEND
             c_wd.fill = FILL_WEEKEND
 
-    for i, row in enumerate(cfg.ROW_DEFS):
+    for i, row in enumerate(client.rows):
         r = top + cfg.OFFSET_FIRST_ACTIVITY + i
         ws.cell(row=r, column=cfg.COL_LABEL, value=row["label"])
         for d in range(1, n + 1):
@@ -292,23 +299,28 @@ def write_month_block(ws, top, year, month, colors, marks, note, ready, moon_by_
                 cell.value = mark
             cell.alignment, cell.border = CENTER, BORDER
 
-    return top + cfg.OFFSET_FIRST_ACTIVITY + cfg.ACTIVITY_ROW_COUNT + 2
+    return top + cfg.OFFSET_FIRST_ACTIVITY + client.activity_row_count + 2
 
 
 # ---------------------------------------------------------------------------
 # Легенда
 # ---------------------------------------------------------------------------
 
-def write_legend(ws):
+def write_legend(ws, client):
+    first = f"{cfg.MONTH_TITLES_RU[client.start_date.month]} {client.start_date.year}"
+    last = f"{cfg.MONTH_TITLES_RU[client.end_date.month]} {client.end_date.year}"
     ws.cell(row=2, column=2,
-            value='Легенда таблицы "Бизнес-календарь на год" (Август 2026 - Август 2027)')
+            value=f'Легенда таблицы "Бизнес-календарь на год" ({first} - {last})')
     ws.cell(row=4, column=2, value="Пояснения к таблице:")
     ws.cell(row=5, column=2, value="Синий – Полнолуние")
     ws.cell(row=6, column=2, value="Голубой - Новолуние")
 
     r = 8
-    for ch in cfg.KNOWN_MARKS:
-        ws.cell(row=r, column=2, value=f"{ch} – {cfg.MARK_TEXTS_FALLBACK[ch]}")
+    # Буквы клиента идут наравне с каталогом: легенда книги — то, что
+    # конвертер потом читает, и символ без строки в ней стал бы неизвестным.
+    texts = client.mark_texts
+    for ch in client.known_marks:
+        ws.cell(row=r, column=2, value=f"{ch} – {texts[ch]}")
         r += 1
     ws.column_dimensions["B"].width = 90
 
@@ -317,9 +329,9 @@ def write_legend(ws):
 # Сборка книги
 # ---------------------------------------------------------------------------
 
-def build(mode, out_path):
-    start = date.fromisoformat(cfg.RANGE_START)
-    end = date.fromisoformat(cfg.RANGE_END)
+def build(path, client, mode="demo"):
+    start = client.start_date
+    end = client.end_date
 
     events = moon_events_in_range(start, end)
     moon_by_day = {d: kind for d, kind in events}
@@ -337,7 +349,7 @@ def build(mode, out_path):
     wb = Workbook()
     legend = wb.active
     legend.title = cfg.LEGEND_SHEET_CANDIDATES[0]
-    write_legend(legend)
+    write_legend(legend, client)
 
     ws = wb.create_sheet(cfg.CALENDAR_SHEET_CANDIDATES[0])
     ws.column_dimensions["A"].width = 16
@@ -350,13 +362,13 @@ def build(mode, out_path):
 
     top = 2
     y, m = start.year, start.month
-    for _ in range(cfg.EXPECTED_MONTHS):
+    for _ in range(client.expected_months):
         is_august_2026 = (y == 2026 and m == 8)
 
         if is_august_2026:
             colors, marks, note, ready = aug_colors, AUGUST_MARKS, AUGUST_NOTE, True
         elif mode == "demo":
-            colors, marks = synth_month(y, m, rng)
+            colors, marks = synth_month(y, m, rng, client)
             note = (f"Демонстрационный прогноз на "
                     f"{cfg.MONTH_TITLES_RU[m].lower()} {y}. Синтетический текст, "
                     f"нужен только чтобы проверить вёрстку и длинные абзацы.")
@@ -364,34 +376,50 @@ def build(mode, out_path):
         else:
             colors, marks, note, ready = {}, {}, cfg.PLACEHOLDER_NOTE, False
 
-        top = write_month_block(ws, top, y, m, colors, marks, note, ready, moon_by_day)
+        top = write_month_block(ws, top, y, m, colors, marks, note, ready,
+                                moon_by_day, client)
         m += 1
         if m == 13:
             m, y = 1, y + 1
 
-    wb.save(out_path)
+    wb.save(path)
     return len(events), moon_by_day
 
 
 def main():
+    root = Path(__file__).resolve().parents[1]
     ap = argparse.ArgumentParser(description="Генератор эталонной книги календаря")
     ap.add_argument("--mode", choices=["template", "demo"], default="template")
+    ap.add_argument("--client",
+                    default=str(root / "tests" / "fixtures" / "client-test.json"),
+                    help="конфиг клиента, по которому строится книга")
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
 
+    try:
+        client = load_client(Path(args.client))
+    except ClientConfigError as exc:
+        fail(str(exc))
+        return 2
+
     out = Path(args.out) if args.out else (
-        Path(__file__).resolve().parents[1] / ".tmp" / f"reference-{args.mode}.xlsx")
+        root / ".tmp" / f"reference-{args.mode}.xlsx")
     out.parent.mkdir(parents=True, exist_ok=True)
 
-    total_events, moon_by_day = build(args.mode, out)
+    total_events, moon_by_day = build(out, client, mode=args.mode)
 
     print(f"Записано: {out}")
     print(f"Режим: {args.mode}")
+    print(f"Клиент: {args.client}")
+    print(f"Диапазон: {client.range_start} … {client.range_end} "
+          f"({client.expected_months} мес., {client.expected_days} дн.)")
     print(f"Фаз луны в диапазоне (расчётных): {total_events}")
     print(f"Размечено в книге: {len(moon_by_day)}")
     aug = sorted(d for d in moon_by_day if d.year == 2026 and d.month == 8)
-    print(f"Август 2026: {', '.join(f'{d.day} — {moon_by_day[d]}' for d in aug)}")
+    if aug:
+        print(f"Август 2026: {', '.join(f'{d.day} — {moon_by_day[d]}' for d in aug)}")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
