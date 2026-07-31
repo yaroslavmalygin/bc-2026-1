@@ -22,12 +22,32 @@ sys.path.insert(0, str(ROOT / "tools"))
 
 import calendar_config as cfg
 import console
+from client_config import ClientConfig, load_client
 from console import BOLD, DIM, RESET, fail, head, info, ok
 from make_reference_xlsx import build
 from xlsx_to_calendar_json import ConvertError, convert
 
 WORK = ROOT / ".tmp" / "fixtures"
 BASE = WORK / "base-demo.xlsx"
+
+CLIENT = load_client(ROOT / "tests" / "fixtures" / "client-test.json")
+ROWS = CLIENT.rows
+
+
+def client_with(**over):
+    """Конфиг того же клиента с одним изменённым полем.
+
+    Нужен кейсам, где ломается не книга, а конфиг: конвертер обязан
+    остановиться и на расхождении «таблица против конфига», иначе разница
+    доехала бы до приложения молча.
+    """
+    data = {
+        "range": {"start": CLIENT.range_start, "end": CLIENT.range_end},
+        "rows": [dict(r) for r in ROWS],
+        "extraMarks": dict(CLIENT.extra_marks),
+    }
+    data.update(over)
+    return ClientConfig.from_dict(data)
 
 
 # ---------------------------------------------------------------------------
@@ -119,7 +139,7 @@ def break_unknown_color(wb, ws):
 def break_conditional_formatting(wb, ws):
     top = find_title_row(ws, "ИЮНЬ 2027")
     r1 = top + cfg.OFFSET_FIRST_ACTIVITY
-    r2 = r1 + cfg.ACTIVITY_ROW_COUNT - 1
+    r2 = r1 + CLIENT.activity_row_count - 1
     rng = f"C{r1}:AG{r2}"
     ws.conditional_formatting.add(
         rng,
@@ -155,13 +175,13 @@ def break_moon_same_type(wb, ws):
 
 def break_nine_activity_rows(wb, ws):
     top = find_title_row(ws, "НОЯБРЬ 2026")
-    r = top + cfg.OFFSET_FIRST_ACTIVITY + cfg.ACTIVITY_ROW_COUNT
+    r = top + cfg.OFFSET_FIRST_ACTIVITY + CLIENT.activity_row_count
     ws.cell(row=r, column=cfg.COL_LABEL).value = "Лишняя девятая строка"
 
 
 def break_seven_activity_rows(wb, ws):
     top = find_title_row(ws, "ОКТЯБРЬ 2026")
-    r = top + cfg.OFFSET_FIRST_ACTIVITY + cfg.ACTIVITY_ROW_COUNT - 1
+    r = top + cfg.OFFSET_FIRST_ACTIVITY + CLIENT.activity_row_count - 1
     ws.cell(row=r, column=cfg.COL_LABEL).value = None
 
 
@@ -185,11 +205,25 @@ def break_dates_not_number(wb, ws):
     ws.cell(row=top + cfg.OFFSET_DATES, column=cfg.COL_FIRST_DAY + 4).value = "пять"
 
 
+def keep_intact(wb, ws):
+    """Книга остаётся целой: в этих случаях расходится конфиг, а не таблица."""
+
+
+def put_client_mark(wb, ws):
+    """Буква, которой нет в общем каталоге, — законна только через extraMarks."""
+    top = find_title_row(ws, "ИЮЛЬ 2027")
+    ws.cell(row=top + cfg.OFFSET_FIRST_ACTIVITY, column=cfg.COL_FIRST_DAY + 5).value = "Ж"
+
+
 # ---------------------------------------------------------------------------
 # Реестр
 # ---------------------------------------------------------------------------
 # expect — фрагмент, который обязан встретиться в тексте ошибки. Проверяем
 # не только факт падения, но и что оно указывает на настоящую причину.
+#
+# Четвёртый элемент, если он есть, — конфиг клиента для этого случая. Такие
+# случаи проверяют не поломку книги, а расхождение книги с конфигом: конвертер
+# обязан останавливаться и на нём.
 
 CASES = [
     ("пропущенный день",                break_missing_day,             "не подряд"),
@@ -203,11 +237,30 @@ CASES = [
     ("опечатка в STATUS",               break_status_typo,             "ожидается"),
     ("два STATUS в блоке",              break_double_status,           "несколько статусов"),
     ("две одинаковые фазы подряд",      break_moon_same_type,          "чередоваться"),
-    ("девять строк активностей",        break_nine_activity_rows,      "девятая"),
+    ("девять строк активностей",        break_nine_activity_rows,      "нашлась ещё одна"),
     ("семь строк активностей",          break_seven_activity_rows,     "подписи строк"),
     ("остатки справа от месяца",        break_leftover_right,          "справа от последнего дня"),
     ("переименованный лист",            break_sheet_renamed,           "не найден лист"),
     ("нечисло в строке дат",            break_dates_not_number,        "не число"),
+
+    ("конфиг объявляет месяц, которого нет в книге",
+     keep_intact, "набор месяцев не совпадает",
+     lambda: client_with(range={"start": "2026-08-01", "end": "2027-09-30"})),
+    ("конфиг объявляет строк больше, чем в книге",
+     keep_intact, "подписи строк активностей",
+     lambda: client_with(rows=ROWS + [{"id": "extra", "label": "Лишняя строка",
+                                       "short": "Лишняя"}])),
+    ("конфиг объявляет строк меньше, чем в книге",
+     keep_intact, "нашлась ещё одна",
+     lambda: client_with(rows=ROWS[:-1])),
+]
+
+# Обратная сторона той же проверки: буква, объявленная клиентом в extraMarks,
+# обязана ПРОХОДИТЬ. Иначе конфиг умел бы только запрещать.
+ACCEPT_CASES = [
+    ("буква из extraMarks принимается",
+     put_client_mark,
+     lambda: client_with(extraMarks={"Ж": "Тестовая буква этого клиента."})),
 ]
 
 
@@ -215,12 +268,13 @@ CASES = [
 # Запуск
 # ---------------------------------------------------------------------------
 
-def run_case(name, mutate, expect):
+def run_case(name, mutate, expect, make_client=None):
     slug = f"case-{abs(hash(name)) % 100000}"
     path = edit(slug, mutate)
     out = WORK / f"{slug}.json"
+    client = make_client() if make_client else CLIENT
     try:
-        convert(path, out)
+        convert(path, out, client)
     except ConvertError as exc:
         text = str(exc)
         if expect.lower() in text.lower():
@@ -240,19 +294,35 @@ def run_case(name, mutate, expect):
     return False
 
 
+def run_accept(name, mutate, make_client):
+    """Случай наоборот: конвертер обязан ДОРАБОТАТЬ до конца."""
+    slug = f"accept-{abs(hash(name)) % 100000}"
+    path = edit(slug, mutate)
+    out = WORK / f"{slug}.json"
+    try:
+        payload = convert(path, out, make_client())
+    except Exception as exc:  # noqa: BLE001
+        fail(f"{name}: конвертер остановился — {type(exc).__name__}: "
+             f"{str(exc).splitlines()[0][:120]}")
+        return False
+    ok(f"{name}")
+    print(f"    {DIM}{len(payload['days'])} дней записано{RESET}")
+    return True
+
+
 def main():
     WORK.mkdir(parents=True, exist_ok=True)
 
     head("Готовим эталонную книгу")
-    build("demo", BASE)
+    build(BASE, CLIENT, mode="demo")
     ok(f"{BASE.name}")
 
     head("Контрольный прогон: целая книга должна конвертироваться")
     baseline_ok = True
     try:
-        payload = convert(BASE, WORK / "baseline.json")
-        assert len(payload["days"]) == cfg.EXPECTED_DAYS
-        assert len(payload["months"]) == cfg.EXPECTED_MONTHS
+        payload = convert(BASE, WORK / "baseline.json", CLIENT)
+        assert len(payload["days"]) == CLIENT.expected_days
+        assert len(payload["months"]) == CLIENT.expected_months
         ok(f"{len(payload['days'])} дней, {len(payload['months'])} месяцев, "
            f"{len(payload['moonEvents'])} фаз")
     except Exception as exc:  # noqa: BLE001
@@ -261,6 +331,9 @@ def main():
 
     head("Сломанные книги")
     results = [run_case(*case) for case in CASES]
+
+    head("Случаи, где конвертер обязан пропустить")
+    results += [run_accept(*case) for case in ACCEPT_CASES]
 
     passed = sum(results)
     total = len(results)

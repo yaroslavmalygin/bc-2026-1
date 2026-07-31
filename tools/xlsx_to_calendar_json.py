@@ -1,15 +1,18 @@
 """
-Конвертер бизнес-календаря: .xlsx → docs/data/calendar.json
+Конвертер бизнес-календаря: .xlsx → docs/NN/data/calendar.json
 
 Сквозной принцип: любое расхождение останавливает генерацию с сообщением,
 называющим месяц и ячейку. Приложение офлайновое — тихо испорченные данные
 никто не заметит месяцами, поэтому падение всегда лучше догадки.
 
+Диапазон, набор строк и дополнительные символы конвертер берёт из конфига
+клиента (--client), а не из собственных констант: у клиентов они разные.
+
 Режимы:
   --report-colors   перечисляет все встреченные заливки с их видом и
                     примерами ячеек. Запускается ПЕРВЫМ на новом файле,
                     до того как править палитру в calendar_config.
-  (обычный)         пишет docs/data/calendar.json
+  (обычный)         пишет docs/NN/data/calendar.json
 """
 
 import argparse
@@ -29,6 +32,7 @@ from openpyxl.utils import get_column_letter, range_boundaries
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import calendar_config as cfg
 import console
+from client_config import ClientConfigError, load_client
 from console import fail, head, info, ok, warn
 from xlsx_colors import ThemeResolver, describe_fill
 
@@ -142,7 +146,7 @@ def find_legend_sheet(wb, calendar_ws):
 # Условное форматирование
 # ===========================================================================
 
-def check_conditional_formatting(ws, blocks):
+def check_conditional_formatting(ws, blocks, client):
     """Останавливаемся, только если правило задевает сами данные.
 
     Безобидное правило в легенде или служебной части листа блокировать
@@ -159,7 +163,7 @@ def check_conditional_formatting(ws, blocks):
     data_rows = set()
     for b in blocks:
         data_rows.add(b["dates_row"])
-        for i in range(cfg.ACTIVITY_ROW_COUNT):
+        for i in range(client.activity_row_count):
             data_rows.add(b["first_activity_row"] + i)
 
     hits = []
@@ -323,7 +327,7 @@ def read_dates_row(ws, block):
     return day_to_col, last_col
 
 
-def check_nothing_beyond(ws, block, last_col, resolver):
+def check_nothing_beyond(ws, block, last_col, resolver, client):
     """Справа от последнего дня не должно быть ни отметок, ни заливок.
 
     Ловит остатки августовской копии: число стёрли, а зелёный фон 31-й
@@ -331,7 +335,7 @@ def check_nothing_beyond(ws, block, last_col, resolver):
     """
     title = block["title"]
     rows = [block["dates_row"]] + [block["first_activity_row"] + i
-                                   for i in range(cfg.ACTIVITY_ROW_COUNT)]
+                                   for i in range(client.activity_row_count)]
     leftovers = []
     for r in rows:
         for col in range(last_col + 1, last_col + 1 + 4):
@@ -351,23 +355,29 @@ def check_nothing_beyond(ws, block, last_col, resolver):
 # Символы
 # ===========================================================================
 
-def parse_marks(raw, title, ref):
-    """Нормализует содержимое ячейки и разбирает его на известные символы."""
+def parse_marks(raw, title, ref, client):
+    """Нормализует содержимое ячейки и разбирает его на известные символы.
+
+    Каталог символов — общий для астролога, но клиент может объявить свои
+    буквы в extraMarks: у одного в строках массаж, у другого пластика.
+    """
     text = norm_text(raw)
     if not text:
         return ""
 
+    known = client.known_marks
     out = []
     for ch in text:
         if ch == " ":
             continue
         ch = cfg.HOMOGLYPHS.get(ch, ch)
-        if ch not in cfg.KNOWN_MARKS:
+        if ch not in known:
             raise ConvertError(
                 f"{title}: в {ref} встретился неизвестный символ «{ch}» "
                 f"(код U+{ord(ch):04X}) в значении «{text}».\n"
-                f"Известные: {' '.join(cfg.KNOWN_MARKS)}.\n"
-                "Символ без расшифровки не должен доехать до приложения.")
+                f"Известные: {' '.join(known)}.\n"
+                "Символ без расшифровки не должен доехать до приложения.\n"
+                "Если буква законная, объявите её в extraMarks конфига клиента.")
         out.append(ch)
     return "".join(out)
 
@@ -395,17 +405,20 @@ def bucket_for(hex6, kind, palette, title, ref, zone):
 # Разбор блока
 # ===========================================================================
 
-def parse_block(ws, block, next_title_row, resolver):
+def parse_block(ws, block, next_title_row, resolver, client):
     title = block["title"]
+    count = client.activity_row_count
     ready = read_status(ws, block, next_title_row)
     day_to_col, last_col = read_dates_row(ws, block)
-    check_nothing_beyond(ws, block, last_col, resolver)
+    check_nothing_beyond(ws, block, last_col, resolver, client)
 
     note = norm_text(ws.cell(row=block["note_row"], column=cfg.COL_LABEL).value)
 
-    # Проверяем, что строк активностей ровно восемь и они на месте.
+    # Число строк объявлено в конфиге клиента. Расхождение — стоп: у одного
+    # клиента строк восемь, у другого может быть иначе, и «догадаться»
+    # означало бы молча потерять или выдумать строку.
     labels = []
-    for i in range(cfg.ACTIVITY_ROW_COUNT):
+    for i in range(count):
         r = block["first_activity_row"] + i
         labels.append(norm_text(ws.cell(row=r, column=cfg.COL_LABEL).value))
     if not all(labels):
@@ -413,15 +426,16 @@ def parse_block(ws, block, next_title_row, resolver):
         raise ConvertError(
             f"{title}: не найдены подписи строк активностей № {missing} "
             f"(строки {block['first_activity_row']}–"
-            f"{block['first_activity_row'] + cfg.ACTIVITY_ROW_COUNT - 1}).\n"
-            "Ожидается ровно восемь строк подряд под строкой дат.")
+            f"{block['first_activity_row'] + count - 1}).\n"
+            f"Конфиг клиента объявляет {count} строк подряд под строкой дат.")
 
-    extra_row = block["first_activity_row"] + cfg.ACTIVITY_ROW_COUNT
+    extra_row = block["first_activity_row"] + count
     if norm_text(ws.cell(row=extra_row, column=cfg.COL_LABEL).value):
         raise ConvertError(
-            f"{title}: под восемью строками активностей нашлась девятая — "
-            f"{cell_ref(extra_row, cfg.COL_LABEL)}. "
-            "Раскладка блока изменилась, разбор остановлен.")
+            f"{title}: под объявленными {count} строками активностей нашлась "
+            f"ещё одна — {cell_ref(extra_row, cfg.COL_LABEL)}. "
+            "Либо раскладка блока изменилась, либо строку забыли добавить "
+            "в конфиг клиента; разбор остановлен.")
 
     # Фазы луны из заливок строки дат
     moon = {}
@@ -439,7 +453,7 @@ def parse_block(ws, block, next_title_row, resolver):
     days = {}
     for day, col in day_to_col.items():
         cells = {}
-        for i, rowdef in enumerate(cfg.ROW_DEFS):
+        for i, rowdef in enumerate(client.rows):
             r = block["first_activity_row"] + i
             cell = ws.cell(row=r, column=col)
             ref = cell_ref(r, col)
@@ -447,7 +461,7 @@ def parse_block(ws, block, next_title_row, resolver):
             bucket = bucket_for(hex6, kind, cfg.PALETTE_ACTIVITY, title, ref, "активности")
             cells[rowdef["id"]] = {
                 "c": bucket or "none",
-                "m": parse_marks(cell.value, title, ref),
+                "m": parse_marks(cell.value, title, ref, client),
             }
         days[day] = {"cells": cells}
 
@@ -544,14 +558,15 @@ def build_moon(parsed):
 # Легенда
 # ===========================================================================
 
-def parse_legend(ws):
+def parse_legend(ws, client):
     """Тексты расшифровок из таблицы. Набор символов сюда не заглядывает —
-    он задан константой, иначе сдвиг легендного блока сделал бы неизвестными
-    разом все символы."""
+    он задан каталогом и конфигом клиента, иначе сдвиг легендного блока
+    сделал бы неизвестными разом все символы."""
     texts = {}
     if ws is None:
         return texts
 
+    known = client.known_marks
     pattern = re.compile(r"^(.)\s*[–—-]\s*(.+)$")
     for row in ws.iter_rows():
         for cell in row:
@@ -562,15 +577,16 @@ def parse_legend(ws):
             if not m:
                 continue
             ch = cfg.HOMOGLYPHS.get(m.group(1), m.group(1))
-            if ch in cfg.KNOWN_MARKS and ch not in texts:
+            if ch in known and ch not in texts:
                 texts[ch] = m.group(2).strip()
     return texts
 
 
-def build_legend(legend_texts, used_marks):
+def build_legend(legend_texts, used_marks, client):
+    fallback = client.mark_texts
     marks = []
-    for ch in cfg.KNOWN_MARKS:
-        text = legend_texts.get(ch) or cfg.MARK_TEXTS_FALLBACK[ch]
+    for ch in client.known_marks:
+        text = legend_texts.get(ch) or fallback[ch]
         if ch in used_marks and ch not in legend_texts:
             warn(f"символ «{ch}» есть в сетке, но описания в легенде таблицы "
                  "не нашлось — взят резервный текст из конфига")
@@ -589,12 +605,12 @@ def build_legend(legend_texts, used_marks):
 # Проверка диапазона
 # ===========================================================================
 
-def validate_range(parsed, days):
-    start = date.fromisoformat(cfg.RANGE_START)
-    end = date.fromisoformat(cfg.RANGE_END)
+def validate_range(parsed, days, client):
+    start = client.start_date
+    end = client.end_date
 
     keys = [m["key"] for m in parsed]
-    expected = [month_key(y, m) for y, m in iter_months(start, cfg.EXPECTED_MONTHS)]
+    expected = [month_key(y, m) for y, m in iter_months(start, client.expected_months)]
 
     dupes = [k for k, c in Counter(keys).items() if c > 1]
     if dupes:
@@ -615,17 +631,19 @@ def validate_range(parsed, days):
         if not parts:
             parts.append(f"нарушен порядок: {', '.join(keys)}")
         raise ConvertError(
-            f"набор месяцев не совпадает с ожидаемым "
-            f"({cfg.RANGE_START[:7]} … {cfg.RANGE_END[:7]}). " + "; ".join(parts))
+            f"набор месяцев не совпадает с объявленным в конфиге клиента "
+            f"({client.range_start[:7]} … {client.range_end[:7]}). "
+            + "; ".join(parts))
 
-    if len(parsed) != cfg.EXPECTED_MONTHS:
+    if len(parsed) != client.expected_months:
         raise ConvertError(
-            f"найдено блоков месяцев: {len(parsed)}, а ожидается "
-            f"{cfg.EXPECTED_MONTHS}.")
+            f"найдено блоков месяцев: {len(parsed)}, а конфиг клиента "
+            f"объявляет {client.expected_months}.")
 
-    if len(days) != cfg.EXPECTED_DAYS:
+    if len(days) != client.expected_days:
         raise ConvertError(
-            f"дней в календаре {len(days)}, а должно быть {cfg.EXPECTED_DAYS}.")
+            f"дней в календаре {len(days)}, а конфиг клиента объявляет "
+            f"{client.expected_days}.")
 
     cur = start
     while cur <= end:
@@ -637,7 +655,7 @@ def validate_range(parsed, days):
         d = date.fromisoformat(k)
         if not (start <= d <= end):
             raise ConvertError(f"день {k} выходит за диапазон "
-                               f"{cfg.RANGE_START}…{cfg.RANGE_END}")
+                               f"{client.range_start}…{client.range_end}")
 
 
 # ===========================================================================
@@ -671,7 +689,7 @@ def scrub(text):
 # Режим --report-colors
 # ===========================================================================
 
-def report_colors(ws, blocks, resolver):
+def report_colors(ws, blocks, resolver, client):
     head("Заливки, встреченные в файле")
 
     zones = {"строка дат": defaultdict(list), "активности": defaultdict(list)}
@@ -688,7 +706,7 @@ def report_colors(ws, blocks, resolver):
         for _, col in day_to_col.items():
             targets = [(block["dates_row"], "строка дат")] + [
                 (block["first_activity_row"] + i, "активности")
-                for i in range(cfg.ACTIVITY_ROW_COUNT)]
+                for i in range(client.activity_row_count)]
             for r, zone in targets:
                 hex6, kind = describe_fill(ws.cell(row=r, column=col), resolver)
                 kinds[kind] += 1
@@ -724,7 +742,7 @@ def report_colors(ws, blocks, resolver):
 # Основной проход
 # ===========================================================================
 
-def convert(xlsx_path, out_path, report_only=False, autodetect=False):
+def convert(xlsx_path, out_path, client, report_only=False, autodetect=False):
     wb = load_workbook(xlsx_path, data_only=True)
     resolver = ThemeResolver(wb)
 
@@ -734,15 +752,15 @@ def convert(xlsx_path, out_path, report_only=False, autodetect=False):
     info(f"найдено блоков месяцев: {len(blocks)}")
 
     if report_only:
-        report_colors(ws, blocks, resolver)
+        report_colors(ws, blocks, resolver, client)
         return None
 
-    check_conditional_formatting(ws, blocks)
+    check_conditional_formatting(ws, blocks, client)
 
     parsed = []
     for i, block in enumerate(blocks):
         nxt = blocks[i + 1]["title_row"] if i + 1 < len(blocks) else None
-        parsed.append(parse_block(ws, block, nxt, resolver))
+        parsed.append(parse_block(ws, block, nxt, resolver, client))
 
     august = next((m for m in parsed if m["key"] == "2026-08"), None)
     august_signature = (json.dumps(august["days"], sort_keys=True, ensure_ascii=False)
@@ -758,18 +776,19 @@ def convert(xlsx_path, out_path, report_only=False, autodetect=False):
             for cell in payload["cells"].values():
                 used_marks.update(cell["m"])
 
-    validate_range(parsed, days)
+    validate_range(parsed, days, client)
 
     moon_events, moon_gaps = build_moon(parsed)
-    legend = build_legend(parse_legend(find_legend_sheet(wb, ws)), used_marks)
+    legend = build_legend(parse_legend(find_legend_sheet(wb, ws), client),
+                          used_marks, client)
 
     payload = {
         "version": SCHEMA_VERSION,
         "generatedAt": date.today().isoformat(),
         "dataHash": "",
         "provisional": bool(cfg.PROVISIONAL_PALETTE),
-        "range": {"start": cfg.RANGE_START, "end": cfg.RANGE_END},
-        "rows": [dict(r) for r in cfg.ROW_DEFS],
+        "range": {"start": client.range_start, "end": client.range_end},
+        "rows": [dict(r) for r in client.rows],
         "legend": legend,
         "months": [{"key": m["key"], "title": m["title"],
                     "note": scrub(m["note"]) if m["ready"] else "",
@@ -788,7 +807,7 @@ def convert(xlsx_path, out_path, report_only=False, autodetect=False):
     return payload
 
 
-def print_summary(payload, out_path):
+def print_summary(payload, out_path, client):
     head("Результат")
     ok(f"записан {out_path}")
     info(f"дней: {len(payload['days'])}")
@@ -807,7 +826,8 @@ def print_summary(payload, out_path):
     head("Шлюз перед публикацией")
     gate = [
         (len(not_ready) == 0, "все месяцы имеют статус READY"),
-        (len(payload["days"]) == cfg.EXPECTED_DAYS, f"ровно {cfg.EXPECTED_DAYS} дней"),
+        (len(payload["days"]) == client.expected_days,
+         f"ровно {client.expected_days} дней"),
         (len(payload["moonGaps"]) == 0, "разрывов в фазах нет"),
         (not payload["provisional"], "палитра подтверждена по реальному .xlsx"),
         (bool(payload["dataHash"]), "dataHash рассчитан"),
@@ -825,7 +845,9 @@ def main():
     ap = argparse.ArgumentParser(description="xlsx → calendar.json")
     root = Path(__file__).resolve().parents[1]
     ap.add_argument("--xlsx", default=str(root / ".tmp" / "calendar.xlsx"))
-    ap.add_argument("--out", default=str(root / "docs" / "data" / "calendar.json"))
+    ap.add_argument("--out", default=str(root / "docs" / "01" / "data" / "calendar.json"))
+    ap.add_argument("--client", default=str(root / "clients" / "01" / "client.json"),
+                    help="конфиг клиента: диапазон, строки, доп. символы")
     ap.add_argument("--report-colors", action="store_true",
                     help="показать все заливки файла и остановиться")
     ap.add_argument("--allow-sheet-autodetect", action="store_true",
@@ -840,7 +862,13 @@ def main():
         return 2
 
     try:
-        payload = convert(xlsx_path, Path(args.out),
+        client = load_client(Path(args.client))
+    except ClientConfigError as exc:
+        fail(str(exc))
+        return 2
+
+    try:
+        payload = convert(xlsx_path, Path(args.out), client,
                           report_only=args.report_colors,
                           autodetect=args.allow_sheet_autodetect)
     except ConvertError as exc:
@@ -849,7 +877,7 @@ def main():
         return 1
 
     if payload is not None:
-        print_summary(payload, Path(args.out))
+        print_summary(payload, Path(args.out), client)
     return 0
 
 
