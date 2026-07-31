@@ -15,7 +15,11 @@ import { fileURLToPath } from "node:url";
 
 import { chromium, devices } from "playwright";
 
-const BASE = process.argv[2] || "https://yaroslavmalygin.github.io/bc-2026-1/";
+const BASE = process.argv[2] || "https://yaroslavmalygin.github.io/bc/01/";
+
+// Подкаталог берём из адреса, а не константой: у каждого клиента он свой,
+// и тест обязан работать по любому адресу, переданному аргументом.
+const BASE_PATH = new URL(BASE).pathname;
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SHOTS = resolve(HERE, "..", ".tmp", "screens");
 
@@ -94,9 +98,9 @@ async function main() {
       icon: document.querySelector('link[rel=apple-touch-icon]')?.href,
     }));
     check("манифест лежит внутри проекта",
-      urls.manifest?.includes("/bc-2026-1/"), urls.manifest);
+      urls.manifest?.includes(BASE_PATH), urls.manifest);
     check("иконка лежит внутри проекта",
-      urls.icon?.includes("/bc-2026-1/"), urls.icon);
+      urls.icon?.includes(BASE_PATH), urls.icon);
 
     const manifest = await page.evaluate(async (href) => {
       const r = await fetch(href);
