@@ -12,7 +12,7 @@
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
-import * as D from "../docs/dates.js";
+import * as D from "../app/dates.js";
 
 const GREEN = "\x1b[32m";
 const RED = "\x1b[31m";
