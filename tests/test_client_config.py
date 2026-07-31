@@ -120,6 +120,54 @@ def expect_error(data, fragment):
     raise AssertionError(f"ожидалась ошибка со словом «{fragment}», но её не было")
 
 
+@case("опор луны нет — это не ошибка")
+def _():
+    c = ClientConfig.from_dict(cfg())
+    assert c.moon_anchor_before is None, c.moon_anchor_before
+    assert c.moon_anchor_after is None, c.moon_anchor_after
+
+
+@case("опоры луны читаются")
+def _():
+    c = ClientConfig.from_dict(cfg(moonAnchors={
+        "before": {"date": "2026-08-30", "type": "full"},
+        "after": {"date": "2027-10-02", "type": "new"},
+    }))
+    assert c.moon_anchor_before == {"date": "2026-08-30", "type": "full"}, \
+        c.moon_anchor_before
+    assert c.moon_anchor_after == {"date": "2027-10-02", "type": "new"}, \
+        c.moon_anchor_after
+
+
+@case("опора «до» внутри диапазона — ошибка")
+def _():
+    expect_error(cfg(moonAnchors={"before": {"date": "2026-09-05", "type": "full"}}),
+                 "раньше начала диапазона")
+
+
+@case("опора «после» внутри диапазона — ошибка")
+def _():
+    expect_error(cfg(moonAnchors={"after": {"date": "2027-09-20", "type": "new"}}),
+                 "позже конца диапазона")
+
+
+@case("опора с чужим типом фазы — ошибка")
+def _():
+    expect_error(cfg(moonAnchors={"before": {"date": "2026-08-30", "type": "half"}}),
+                 "new или full")
+
+
+@case("опора без даты — ошибка")
+def _():
+    expect_error(cfg(moonAnchors={"before": {"type": "full"}}), "date")
+
+
+@case("посторонний ключ в опорах — ошибка")
+def _():
+    expect_error(cfg(moonAnchors={"beofre": {"date": "2026-08-30", "type": "full"}}),
+                 "beofre")
+
+
 @case("load_client читает файл")
 def _():
     WORK.mkdir(parents=True, exist_ok=True)

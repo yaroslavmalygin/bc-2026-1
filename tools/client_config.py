@@ -34,12 +34,24 @@ def _parse_day(value, field_name):
         raise ClientConfigError(f"{field_name}: {exc}") from exc
 
 
+MOON_TYPES = ("new", "full")
+
+
 @dataclass
 class ClientConfig:
     range_start: str
     range_end: str
     rows: list
     extra_marks: dict = field(default_factory=dict)
+    moon_anchors: dict = field(default_factory=dict)
+
+    @property
+    def moon_anchor_before(self):
+        return self.moon_anchors.get("before")
+
+    @property
+    def moon_anchor_after(self):
+        return self.moon_anchors.get("after")
 
     @property
     def row_ids(self):
@@ -136,12 +148,67 @@ class ClientConfig:
             if not isinstance(text, str) or not text:
                 raise ClientConfigError(f"у символа «{mark}» пустая расшифровка")
 
+        anchors = _parse_moon_anchors(data.get("moonAnchors", {}), start, end)
+
         return cls(
             range_start=rng["start"],
             range_end=rng["end"],
             rows=[dict(r) for r in rows],
             extra_marks=dict(extra),
+            moon_anchors=anchors,
         )
+
+
+def _parse_moon_anchors(data, start, end):
+    """Фазы луны, ближайшие снаружи диапазона.
+
+    Без них крайние дни календаря остаются без фазы: интерполяция требует
+    опоры с обеих сторон, а таблица астролога заканчивается вместе с
+    диапазоном. Экстраполировать нельзя — за месяц луна успевает и вырасти,
+    и убыть, поэтому неизвестно даже направление. Значит опоры приходят
+    данными: астролог называет две даты.
+
+    Здесь проверяется только форма и сторона. Что опора не спорит с
+    таблицей — чередование типов и расстояние до ближайшей фазы — проверяет
+    конвертер: конфиг о содержимом книги ничего не знает.
+    """
+    if not isinstance(data, dict):
+        raise ClientConfigError("moonAnchors должен быть объектом")
+
+    unknown = set(data) - {"before", "after"}
+    if unknown:
+        raise ClientConfigError(
+            f"в moonAnchors посторонние ключи: {', '.join(sorted(unknown))}. "
+            "Допустимы только before и after.")
+
+    out = {}
+    for side in ("before", "after"):
+        raw = data.get(side)
+        if raw is None:
+            continue
+        if not isinstance(raw, dict):
+            raise ClientConfigError(f"moonAnchors.{side} должен быть объектом")
+
+        when = _parse_day(raw.get("date"), f"moonAnchors.{side}.date")
+        kind = raw.get("type")
+        if kind not in MOON_TYPES:
+            raise ClientConfigError(
+                f"moonAnchors.{side}.type — «{kind}», а допустимы "
+                f"только {' или '.join(MOON_TYPES)}")
+
+        if side == "before" and when >= start:
+            raise ClientConfigError(
+                f"moonAnchors.before ({when}) должна быть раньше начала "
+                f"диапазона ({start}): опора внутри диапазона уже есть "
+                "в самой таблице")
+        if side == "after" and when <= end:
+            raise ClientConfigError(
+                f"moonAnchors.after ({when}) должна быть позже конца "
+                f"диапазона ({end}): опора внутри диапазона уже есть "
+                "в самой таблице")
+
+        out[side] = {"date": when.isoformat(), "type": kind}
+    return out
 
 
 def load_client(path):

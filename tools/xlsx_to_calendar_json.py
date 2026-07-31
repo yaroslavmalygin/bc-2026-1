@@ -513,12 +513,55 @@ def resolve_ready(parsed, august_signature):
 # Фазы луны: чередование и разрывы
 # ===========================================================================
 
-def build_moon(parsed):
+def add_moon_anchors(events, client):
+    """Приставляет к списку фазы, лежащие сразу за краями диапазона.
+
+    Зачем: интерполяция требует опоры с обеих сторон, а таблица астролога
+    заканчивается вместе с диапазоном. Без опор первые и последние две
+    недели календаря остаются без фазы — до четверти месяца на каждом краю.
+
+    Опора приходит данными, а не расчётом. Средняя синодическая модель
+    промахивается на сутки (в этом проекте она уже промахнулась по августу
+    2026), а ошибка в опоре тихо перекашивает освещённость на две недели
+    вперёд.
+
+    Опора обязана быть БЛИЖАЙШЕЙ фазой снаружи. Если между ней и краем
+    таблицы прячется ещё одна, интерполяция пройдёт сквозь неё и нарисует
+    диск задом наперёд — поэтому проверяем и чередование, и расстояние.
+    """
+    if not events:
+        return events
+
+    for side, neighbour in (("before", events[0]), ("after", events[-1])):
+        anchor = client.moon_anchors.get(side)
+        if anchor is None:
+            continue
+
+        gap = abs((date.fromisoformat(anchor["date"])
+                   - date.fromisoformat(neighbour["date"])).days)
+        if gap > cfg.MOON_GAP_BREAK:
+            raise ConvertError(
+                f"опора луны moonAnchors.{side} ({anchor['type']} "
+                f"{anchor['date']}) отстоит от ближайшей фазы таблицы "
+                f"({neighbour['type']} {neighbour['date']}) на {gap} дней, "
+                f"а между соседними фазами бывает не больше "
+                f"{cfg.MOON_GAP_BREAK}.\n"
+                "Похоже, названа не ближайшая фаза: между ней и краем "
+                "таблицы есть ещё одна. Нужна именно соседняя.")
+
+        events = [anchor] + events if side == "before" else events + [anchor]
+
+    return events
+
+
+def build_moon(parsed, client):
     events = []
     for m in parsed:
         for day, kind in sorted(m["moon"].items()):
             events.append({"date": day_key(date(m["year"], m["month"], day)), "type": kind})
     events.sort(key=lambda e: e["date"])
+
+    events = add_moon_anchors(events, client)
 
     for a, b in zip(events, events[1:]):
         if a["type"] == b["type"]:
@@ -778,7 +821,7 @@ def convert(xlsx_path, out_path, client, report_only=False, autodetect=False):
 
     validate_range(parsed, days, client)
 
-    moon_events, moon_gaps = build_moon(parsed)
+    moon_events, moon_gaps = build_moon(parsed, client)
     legend = build_legend(parse_legend(find_legend_sheet(wb, ws), client),
                           used_marks, client)
 

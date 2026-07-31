@@ -253,6 +253,17 @@ CASES = [
     ("конфиг объявляет строк меньше, чем в книге",
      keep_intact, "нашлась ещё одна",
      lambda: client_with(rows=ROWS[:-1])),
+
+    # Опоры луны снаружи диапазона: закрывают края, но обязаны сходиться
+    # с таблицей, иначе диск на краю рисовался бы по выдуманной опоре.
+    ("опора луны не чередуется с ближайшей фазой таблицы",
+     keep_intact, "чередоваться",
+     lambda: client_with(moonAnchors={
+         "before": {"date": "2026-07-29", "type": "new"}})),
+    ("опора луны слишком далеко от ближайшей фазы таблицы",
+     keep_intact, "отстоит от ближайшей фазы",
+     lambda: client_with(moonAnchors={
+         "before": {"date": "2026-06-15", "type": "full"}})),
 ]
 
 # Обратная сторона той же проверки: буква, объявленная клиентом в extraMarks,
@@ -262,6 +273,30 @@ ACCEPT_CASES = [
      put_client_mark,
      lambda: client_with(extraMarks={"Ж": "Тестовая буква этого клиента."})),
 ]
+
+
+def check_moon_anchors_close_edges():
+    """Опоры снаружи диапазона обязаны закрывать края календаря.
+
+    Без них первые одиннадцать и последние четырнадцать дней остаются без
+    фазы: интерполяции не на что опереться с одной стороны.
+    """
+    client = client_with(moonAnchors={
+        "before": {"date": "2026-07-29", "type": "full"},
+        "after": {"date": "2027-09-16", "type": "full"},
+    })
+    payload = convert(BASE, WORK / "anchored.json", client)
+    dates = [e["date"] for e in payload["moonEvents"]]
+
+    assert dates[0] == "2026-07-29", dates[:2]
+    assert dates[-1] == "2027-09-16", dates[-2:]
+    assert not payload["moonGaps"], payload["moonGaps"]
+
+    # Каждый день диапазона теперь зажат между двумя опорами.
+    first, last = client.range_start, client.range_end
+    assert dates[0] < first, dates[0]
+    assert dates[-1] > last, dates[-1]
+    return len(dates)
 
 
 # ---------------------------------------------------------------------------
@@ -334,6 +369,16 @@ def main():
 
     head("Случаи, где конвертер обязан пропустить")
     results += [run_accept(*case) for case in ACCEPT_CASES]
+
+    head("Опоры луны закрывают края диапазона")
+    try:
+        total = check_moon_anchors_close_edges()
+        ok(f"края закрыты, опор стало {total}")
+        results.append(True)
+    except Exception as exc:  # noqa: BLE001
+        fail(f"опоры не закрыли края: {type(exc).__name__}: "
+             f"{str(exc).splitlines()[0][:140]}")
+        results.append(False)
 
     passed = sum(results)
     total = len(results)

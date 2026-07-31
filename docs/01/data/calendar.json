@@ -1,7 +1,7 @@
 {
  "version": 1,
  "generatedAt": "2026-07-31",
- "dataHash": "sha256:725d41ca2ff1472ac73e640b8bd12834a79e7e60003da5409cad1ad011849f39",
+ "dataHash": "sha256:d48298b457222e846480feddf6c2d0b74c6f17644608654f7d94f52d15ce2ff9",
  "provisional": true,
  "range": {
   "start": "2026-08-01",
@@ -203,6 +203,10 @@
  ],
  "moonEvents": [
   {
+   "date": "2026-07-29",
+   "type": "full"
+  },
+  {
    "date": "2026-08-12",
    "type": "new"
   },
@@ -304,6 +308,14 @@
   },
   {
    "date": "2027-08-17",
+   "type": "full"
+  },
+  {
+   "date": "2027-08-31",
+   "type": "new"
+  },
+  {
+   "date": "2027-09-16",
    "type": "full"
   }
  ],

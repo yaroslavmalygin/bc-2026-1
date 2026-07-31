@@ -10,5 +10,9 @@
     { "id": "medical", "label": "Мед. обследование", "short": "Обследование" },
     { "id": "massage", "label": "Массаж", "short": "Массаж" }
   ],
-  "extraMarks": {}
+  "extraMarks": {},
+  "moonAnchors": {
+    "before": { "date": "2026-07-29", "type": "full" },
+    "after": { "date": "2027-09-16", "type": "full" }
+  }
 }
