@@ -25,10 +25,7 @@ SOP на случай, когда астролог сдал новый год и
 ## 2. Посмотреть, какие цвета в файле
 
 ```bash
-python tools/xlsx_to_calendar_json.py \
-  --xlsx clients/NN/calendar.xlsx \
-  --client clients/NN/client.json \
-  --report-colors
+python tools/xlsx_to_calendar_json.py NN --report-colors
 ```
 
 Отчёт показывает все встреченные заливки, их вид (обычный RGB, цвет темы,
@@ -48,10 +45,7 @@ python tools/xlsx_to_calendar_json.py \
 ## 3. Прогнать конвертер
 
 ```bash
-python tools/xlsx_to_calendar_json.py \
-  --xlsx clients/NN/calendar.xlsx \
-  --client clients/NN/client.json \
-  --out docs/NN/data/calendar.json
+python tools/xlsx_to_calendar_json.py NN
 ```
 
 Любое расхождение останавливает работу с указанием месяца и ячейки. Это

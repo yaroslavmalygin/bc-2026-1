@@ -64,8 +64,7 @@ npm install playwright && npx playwright install chromium
 python tools/make_reference_xlsx.py --mode demo \
        --client clients/01/client.json --out .tmp/reference-demo.xlsx
 python tools/build_client.py 01
-python tools/xlsx_to_calendar_json.py --xlsx .tmp/reference-demo.xlsx \
-       --client clients/01/client.json --out docs/01/data/calendar.json
+python tools/xlsx_to_calendar_json.py 01 --xlsx .tmp/reference-demo.xlsx
 
 # локальный запуск
 python -m http.server 8000 --directory docs   # http://127.0.0.1:8000/01/

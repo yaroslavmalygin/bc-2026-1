@@ -884,13 +884,59 @@ def print_summary(payload, out_path, client):
         head("Это демонстрационная сборка, не финальный календарь")
 
 
+def resolve_paths(root, client_id, xlsx=None, config=None, out=None):
+    """Три пути одного клиента: таблица, конфиг, результат.
+
+    Выводятся из номера, а не задаются по отдельности. Раздельные умолчания
+    уже разъезжались, и разъехавшиеся страшнее пустых: указав только
+    --xlsx clients/03/calendar.xlsx, легко разобрать таблицу третьего
+    клиента по конфигу первого и записать её в данные первого. Диапазон и
+    строки у клиентов могут совпадать, так что подмена прошла бы молча.
+    """
+    root = Path(root)
+
+    if client_id:
+        base = {
+            "xlsx": root / "clients" / client_id / "calendar.xlsx",
+            "config": root / "clients" / client_id / "client.json",
+            "out": root / "docs" / client_id / "data" / "calendar.json",
+        }
+        # Чужой конфиг при указанном номере — почти наверняка описка, а не
+        # замысел: молча предпочесть один из двух означало бы угадывать.
+        if config is not None and Path(config).parent.name != client_id:
+            raise ConvertError(
+                f"указан клиент {client_id}, а конфиг взят из "
+                f"«{config}». Уберите --client либо поправьте номер.")
+    else:
+        # Без номера всё обязано быть названо явно — так работают тесты,
+        # которые собирают клиента во временном каталоге.
+        if config is None:
+            raise ConvertError(
+                "не указан номер клиента. Запуск: "
+                "python tools/xlsx_to_calendar_json.py 01")
+        base = {"xlsx": None, "config": None, "out": None}
+
+    picked = {}
+    for key, given in (("xlsx", xlsx), ("config", config), ("out", out)):
+        value = given if given is not None else base[key]
+        if value is None:
+            raise ConvertError(f"не указан путь --{key}")
+        picked[key] = Path(value)
+
+    return picked["xlsx"], picked["config"], picked["out"]
+
+
 def main():
     ap = argparse.ArgumentParser(description="xlsx → calendar.json")
     root = Path(__file__).resolve().parents[1]
-    ap.add_argument("--xlsx", default=str(root / ".tmp" / "calendar.xlsx"))
-    ap.add_argument("--out", default=str(root / "docs" / "01" / "data" / "calendar.json"))
-    ap.add_argument("--client", default=str(root / "clients" / "01" / "client.json"),
-                    help="конфиг клиента: диапазон, строки, доп. символы")
+    ap.add_argument("client_id", nargs="?", metavar="NN",
+                    help="номер клиента: задаёт таблицу, конфиг и вывод разом")
+    ap.add_argument("--xlsx", default=None,
+                    help="таблица, если она лежит не в clients/NN/calendar.xlsx")
+    ap.add_argument("--out", default=None,
+                    help="куда писать calendar.json")
+    ap.add_argument("--client", default=None, dest="config",
+                    help="конфиг клиента, если он лежит не в clients/NN/client.json")
     ap.add_argument("--report-colors", action="store_true",
                     help="показать все заливки файла и остановиться")
     ap.add_argument("--allow-sheet-autodetect", action="store_true",
@@ -898,20 +944,29 @@ def main():
                          "если он переименован")
     args = ap.parse_args()
 
-    xlsx_path = Path(args.xlsx)
+    try:
+        xlsx_path, config_path, out_path = resolve_paths(
+            root, args.client_id, xlsx=args.xlsx, config=args.config, out=args.out)
+    except ConvertError as exc:
+        fail(str(exc))
+        return 2
+
     if not xlsx_path.exists():
         fail(f"файл не найден: {xlsx_path}")
         info("Скачайте таблицу: File → Download → Microsoft Excel (.xlsx)")
         return 2
 
     try:
-        client = load_client(Path(args.client))
+        client = load_client(config_path)
     except ClientConfigError as exc:
         fail(str(exc))
         return 2
 
+    info(f"таблица: {xlsx_path}")
+    info(f"конфиг:  {config_path}")
+
     try:
-        payload = convert(xlsx_path, Path(args.out), client,
+        payload = convert(xlsx_path, out_path, client,
                           report_only=args.report_colors,
                           autodetect=args.allow_sheet_autodetect)
     except ConvertError as exc:
@@ -920,7 +975,7 @@ def main():
         return 1
 
     if payload is not None:
-        print_summary(payload, Path(args.out), client)
+        print_summary(payload, out_path, client)
     return 0
 
 

@@ -25,7 +25,7 @@ import console
 from client_config import ClientConfig, load_client
 from console import BOLD, DIM, RESET, fail, head, info, ok
 from make_reference_xlsx import build
-from xlsx_to_calendar_json import ConvertError, convert
+from xlsx_to_calendar_json import ConvertError, convert, resolve_paths
 
 WORK = ROOT / ".tmp" / "fixtures"
 BASE = WORK / "base-demo.xlsx"
@@ -345,6 +345,61 @@ def run_accept(name, mutate, make_client):
     return True
 
 
+PATH_CASES = []
+
+
+def path_case(name):
+    def deco(fn):
+        PATH_CASES.append((name, fn))
+        return fn
+    return deco
+
+
+@path_case("номер клиента задаёт все три пути разом")
+def _():
+    xlsx, config, out = resolve_paths(ROOT, "03")
+    assert xlsx == ROOT / "clients" / "03" / "calendar.xlsx", xlsx
+    assert config == ROOT / "clients" / "03" / "client.json", config
+    assert out == ROOT / "docs" / "03" / "data" / "calendar.json", out
+
+
+@path_case("каждый путь можно перебить по отдельности")
+def _():
+    xlsx, config, out = resolve_paths(ROOT, "03", xlsx=".tmp/proba.xlsx")
+    assert xlsx == Path(".tmp/proba.xlsx"), xlsx
+    # Остальные два всё равно принадлежат клиенту 03.
+    assert config == ROOT / "clients" / "03" / "client.json", config
+
+
+@path_case("без номера и без явного конфига — ошибка")
+def _():
+    try:
+        resolve_paths(ROOT, None)
+    except ConvertError as exc:
+        assert "номер клиента" in str(exc), exc
+        return
+    raise AssertionError("ожидалась ошибка про неуказанного клиента")
+
+
+@path_case("тесты задают все пути явно и обходятся без номера")
+def _():
+    xlsx, config, out = resolve_paths(
+        ROOT, None,
+        xlsx="ref.xlsx", config="fixtures/client-test.json", out="build/c.json")
+    assert (xlsx, config, out) == (
+        Path("ref.xlsx"), Path("fixtures/client-test.json"), Path("build/c.json"))
+
+
+@path_case("номер вместе с чужим конфигом — ошибка")
+def _():
+    try:
+        resolve_paths(ROOT, "03", config="clients/01/client.json")
+    except ConvertError as exc:
+        assert "01" in str(exc) and "03" in str(exc), exc
+        return
+    raise AssertionError("ожидалась ошибка про несовпадение клиента")
+
+
 def main():
     WORK.mkdir(parents=True, exist_ok=True)
 
@@ -369,6 +424,16 @@ def main():
 
     head("Случаи, где конвертер обязан пропустить")
     results += [run_accept(*case) for case in ACCEPT_CASES]
+
+    head("Пути клиента в CLI")
+    for name, fn in PATH_CASES:
+        try:
+            fn()
+            ok(name)
+            results.append(True)
+        except AssertionError as exc:
+            fail(f"{name}: {exc}")
+            results.append(False)
 
     head("Опоры луны закрывают края диапазона")
     try:

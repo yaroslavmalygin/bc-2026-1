@@ -10,7 +10,7 @@ SOP на случай, когда астролог привёл нового з�
 ## Что понадобится
 
 - Свободный номер клиента (`clients/` показывает занятые)
-- Ответы на четыре вопроса из шага 2
+- Ответы на пять вопросов из шага 2
 - Таблица клиента в Google Sheets, выгруженная в `.xlsx`
 
 ---
@@ -103,10 +103,7 @@ mkdir -p clients/NN
 ## 5. Посмотреть, какие цвета в файле
 
 ```bash
-python tools/xlsx_to_calendar_json.py \
-  --xlsx clients/NN/calendar.xlsx \
-  --client clients/NN/client.json \
-  --report-colors
+python tools/xlsx_to_calendar_json.py NN --report-colors
 ```
 
 Что проверить — см. шаг 2 в [update_calendar_data.md](update_calendar_data.md):
@@ -118,10 +115,7 @@ python tools/xlsx_to_calendar_json.py \
 Прежде чем писать в `docs/`, убедиться, что таблица вообще разбирается:
 
 ```bash
-python tools/xlsx_to_calendar_json.py \
-  --xlsx clients/NN/calendar.xlsx \
-  --client clients/NN/client.json \
-  --out .tmp/probe-NN.json
+python tools/xlsx_to_calendar_json.py NN --out .tmp/probe-NN.json
 ```
 
 Здесь же выясняется, сошлись ли конфиг и таблица: число месяцев, число строк,
@@ -147,10 +141,7 @@ python tools/xlsx_to_calendar_json.py \
 
 ```bash
 python tools/build_client.py NN
-python tools/xlsx_to_calendar_json.py \
-  --xlsx clients/NN/calendar.xlsx \
-  --client clients/NN/client.json \
-  --out docs/NN/data/calendar.json
+python tools/xlsx_to_calendar_json.py NN
 ```
 
 Порядок именно такой: генератор кладёт оболочку, конвертер — данные. Обратный

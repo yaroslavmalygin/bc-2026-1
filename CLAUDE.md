@@ -34,17 +34,15 @@ https://yaroslavmalygin.github.io/bc/NN/ — например `/bc/01/`.
 # данные и сборка
 python tools/make_reference_xlsx.py --mode demo --client clients/01/client.json \
        --out .tmp/reference-demo.xlsx              # эталонная книга
-python tools/xlsx_to_calendar_json.py --xlsx clients/01/calendar.xlsx \
-       --client clients/01/client.json --report-colors   # что за заливки в файле
-python tools/xlsx_to_calendar_json.py --xlsx clients/01/calendar.xlsx \
-       --client clients/01/client.json --out docs/01/data/calendar.json
+python tools/xlsx_to_calendar_json.py 01 --report-colors  # что за заливки в файле
+python tools/xlsx_to_calendar_json.py 01                  # clients/01/ → docs/01/
 python tools/build_client.py 01                    # app/ → docs/01/
 python tools/build_client.py --all                 # пересобрать оболочку всем
 
 # тесты — прогонять все перед тем, как назвать работу законченной
-python tests/test_client_config.py    # 13 проверок конфига клиента
+python tests/test_client_config.py    # 20 проверок конфига клиента
 python tests/test_build_client.py     # 6 проверок генератора сборок
-python tests/test_converter.py        # 19 намеренно сломанных книг
+python tests/test_converter.py        # 19 сломанных книг плюс пути и опоры луны
 node   tests/test_dates.mjs --all-zones  # 77 проверок × 11 часовых поясов
 node   tests/test_client_id.mjs       # 7 проверок вывода идентификатора
 node   tests/test_app.mjs             # 69 проверок в настоящем браузере

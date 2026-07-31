@@ -236,18 +236,27 @@ async function main() {
         ["2026-08-28", "Полнолуние сегодня"],
       ];
 
+      // Прокрутку ПОВТОРЯЕМ, а не просто ждём после неё. Сразу после
+      // загрузки приложение само доцентровывается на «сегодня» и отменяет
+      // нашу прокрутку — ожидание тут не помогает, потому что ждать нечего:
+      // подпись честно показывает тот день, на который приложение вернулось.
+      // Ложное падение ловилось на первом же дне примерно в трети прогонов.
+      const showDay = async (key, expected) => {
+        for (let attempt = 0; attempt < 10; attempt++) {
+          await page.evaluate((k) => {
+            document.querySelector(`.card[data-day="${k}"]`)
+              ?.scrollIntoView({ behavior: "instant", inline: "center" });
+          }, key);
+          const shown = await page.waitForFunction(
+            (t) => document.getElementById("moonTitle").innerText === t,
+            expected, { timeout: 600 },
+          ).then(() => true).catch(() => false);
+          if (shown) return;
+        }
+      };
+
       for (const [key, expected] of cases) {
-        await page.evaluate((k) => {
-          document.querySelector(`.card[data-day="${k}"]`)
-            .scrollIntoView({ behavior: "instant", inline: "center" });
-        }, key);
-        // Ждём именно смены подписи, а не «примерно столько же миллисекунд»:
-        // сразу после загрузки колода ещё доезжает, и фиксированная пауза
-        // давала ложное падение на первом же дне.
-        await page.waitForFunction(
-          (t) => document.getElementById("moonTitle").innerText === t,
-          expected, { timeout: 3000 },
-        ).catch(() => {});
+        await showDay(key, expected);
         const title = await page.locator("#moonTitle").innerText();
         check(`${key}: ${expected}`, title === expected, `получено: ${title}`);
       }
