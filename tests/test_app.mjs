@@ -17,12 +17,21 @@ import { fileURLToPath } from "node:url";
 
 import { chromium, devices } from "playwright";
 
+import { buildFixture } from "./build_fixture.mjs";
+
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, "..");
-const DOCS = resolve(ROOT, "docs");
 const SHOTS = resolve(ROOT, ".tmp", "screens");
 const PORT = 8123;
 const BASE = `http://127.0.0.1:${PORT}`;
+
+// Клиент лежит в подпапке, а сервер поднимается над ней: так путь непустой
+// и идентификатор клиента выводится по-настоящему, как на боевом адресе.
+const CLIENT_DIR = "app-test";
+const APP = `${BASE}/${CLIENT_DIR}`;
+
+// Заполняется в main() до старта сервера — каталогом собранной фикстуры.
+let SERVE_ROOT;
 
 const GREEN = "\x1b[32m";
 const RED = "\x1b[31m";
@@ -58,7 +67,7 @@ function group(title) {
 function startServer() {
   const proc = spawn(
     process.platform === "win32" ? "python" : "python3",
-    ["-m", "http.server", String(PORT), "--bind", "127.0.0.1", "--directory", DOCS],
+    ["-m", "http.server", String(PORT), "--bind", "127.0.0.1", "--directory", SERVE_ROOT],
     { stdio: "ignore" },
   );
   return proc;
@@ -67,7 +76,7 @@ function startServer() {
 async function waitForServer() {
   for (let i = 0; i < 60; i++) {
     try {
-      const r = await fetch(`${BASE}/index.html`);
+      const r = await fetch(`${APP}/index.html`);
       if (r.ok) return;
     } catch { /* ещё не поднялся */ }
     await new Promise((r) => setTimeout(r, 200));
@@ -91,7 +100,7 @@ async function openApp(browser, { device, date, route } = {}) {
   if (date) await page.clock.install({ time: new Date(date) });
   if (route) await route(page);
 
-  await page.goto(`${BASE}/index.html`, { waitUntil: "domcontentloaded" });
+  await page.goto(`${APP}/index.html`, { waitUntil: "domcontentloaded" });
   await page.waitForFunction(() => {
     const c = document.getElementById("curtain");
     return c && c.hidden;
@@ -106,10 +115,12 @@ const dayHeader = (page) => page.locator("#barDay").innerText();
 
 async function main() {
   mkdirSync(SHOTS, { recursive: true });
+  SERVE_ROOT = await buildFixture([CLIENT_DIR]);
   const server = startServer();
   await waitForServer();
 
-  const data = JSON.parse(readFileSync(resolve(DOCS, "data", "calendar.json"), "utf8"));
+  const data = JSON.parse(
+    readFileSync(resolve(SERVE_ROOT, CLIENT_DIR, "data", "calendar.json"), "utf8"));
   const browser = await chromium.launch();
 
   try {
@@ -230,7 +241,13 @@ async function main() {
           document.querySelector(`.card[data-day="${k}"]`)
             .scrollIntoView({ behavior: "instant", inline: "center" });
         }, key);
-        await page.waitForTimeout(220);
+        // Ждём именно смены подписи, а не «примерно столько же миллисекунд»:
+        // сразу после загрузки колода ещё доезжает, и фиксированная пауза
+        // давала ложное падение на первом же дне.
+        await page.waitForFunction(
+          (t) => document.getElementById("moonTitle").innerText === t,
+          expected, { timeout: 3000 },
+        ).catch(() => {});
         const title = await page.locator("#moonTitle").innerText();
         check(`${key}: ${expected}`, title === expected, `получено: ${title}`);
       }
@@ -282,7 +299,7 @@ async function main() {
             });
           }, size.zoom);
         }
-        await page.goto(`${BASE}/index.html`, { waitUntil: "domcontentloaded" });
+        await page.goto(`${APP}/index.html`, { waitUntil: "domcontentloaded" });
         await page.waitForFunction(() => document.getElementById("curtain").hidden,
           { timeout: 10000 }).catch(() => {});
         await page.waitForTimeout(300);
@@ -370,7 +387,7 @@ async function main() {
       });
       const page = await context.newPage();
       await page.clock.install({ time: new Date("2026-08-12T09:00:00") });
-      await page.goto(`${BASE}/index.html`, { waitUntil: "domcontentloaded" });
+      await page.goto(`${APP}/index.html`, { waitUntil: "domcontentloaded" });
       await page.waitForTimeout(600);
 
       check("в landscape показана просьба повернуть",
@@ -432,7 +449,7 @@ async function main() {
         });
         const page = await context.newPage();
         await page.clock.install({ time: new Date("2026-08-12T09:00:00") });
-        await page.goto(`${BASE}/index.html`, { waitUntil: "domcontentloaded" });
+        await page.goto(`${APP}/index.html`, { waitUntil: "domcontentloaded" });
         await page.waitForFunction(() => document.getElementById("curtain").hidden,
           { timeout: 10000 });
 
@@ -464,7 +481,7 @@ async function main() {
       const page = await context.newPage();
       await page.clock.install({ time: new Date("2026-08-12T09:00:00") });
       await page.route("**/data/calendar.json", (r) => r.abort("failed"));
-      await page.goto(`${BASE}/index.html`, { waitUntil: "domcontentloaded" });
+      await page.goto(`${APP}/index.html`, { waitUntil: "domcontentloaded" });
       await page.waitForTimeout(1200);
 
       const visible = await page.locator("#curtain").isVisible();
@@ -490,7 +507,7 @@ async function main() {
       await page.clock.install({ time: new Date("2026-08-12T09:00:00") });
 
       const t0 = Date.now();
-      await page.goto(`${BASE}/index.html`, { waitUntil: "domcontentloaded" });
+      await page.goto(`${APP}/index.html`, { waitUntil: "domcontentloaded" });
       await page.waitForFunction(() => document.getElementById("curtain").hidden,
         { timeout: 20000 });
       const elapsed = Date.now() - t0;
