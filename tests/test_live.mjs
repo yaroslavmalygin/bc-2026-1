@@ -137,9 +137,20 @@ async function main() {
       !allCached.some((p) => p.includes("calendar.json")),
       allCached.filter((p) => p.includes("calendar")).join(", "));
 
+    // Сколько дней ждать — знает сам календарь: у каждого клиента диапазон
+    // свой, и зашитое здесь число сделало бы тест непереносимым.
+    const expectedDays = await page.evaluate(async () => {
+      const r = await fetch("./data/calendar.json", { cache: "no-store" });
+      return r.ok ? Object.keys((await r.json()).days).length : 0;
+    }).catch(() => 0);
+
+    // Имя базы выводится из адреса так же, как в client-id.js: хранилище
+    // делится по origin, и у каждого клиента база своя.
     const stored = await page.evaluate(async () => {
+      const segment = new URL("./", location.href).pathname
+        .split("/").filter(Boolean).pop() || "local";
       const db = await new Promise((res, rej) => {
-        const r = indexedDB.open("business-calendar", 1);
+        const r = indexedDB.open(`business-calendar-${segment}`, 1);
         r.onsuccess = () => res(r.result);
         r.onerror = () => rej(r.error);
       });
@@ -150,7 +161,9 @@ async function main() {
         req.onerror = () => res(0);
       });
     }).catch(() => 0);
-    check("данные сохранены приложением в своё хранилище", stored === 396, `дней ${stored}`);
+    check("данные сохранены приложением в своё хранилище",
+      expectedDays > 0 && stored === expectedDays,
+      `дней ${stored}, в календаре ${expectedDays}`);
 
     group("Офлайн после первого визита");
 
