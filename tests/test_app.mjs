@@ -574,6 +574,50 @@ async function main() {
       await context.close();
     }
 
+    // =====================================================================
+    group("Фон не двигается при открытии шторки");
+    /*
+     * Фокус внутрь шторки, пока та ещё за нижним краем экрана, заставлял
+     * браузер доскроллить .app до неё: интерфейс уезжал на ~370px вверх и
+     * полз обратно, пока шторка выезжала. На телефоне это выглядело дрожью
+     * фона. `overflow: hidden` тут не защита — он запрещает скролл пальцем,
+     * а не программный, поэтому проверяем измерением, а не наличием стиля.
+     */
+    {
+      const { context, page } = await openApp(browser, {
+        device: "iPhone 15", date: "2026-08-12T09:00:00",
+      });
+
+      // Наблюдатель ставится ДО клика: съезд длится считаные кадры и к
+      // моменту следующей команды Playwright уже раскручивается назад.
+      const watch = () => page.evaluate(() => {
+        window.__drift = [];
+        const app = document.getElementById("app");
+        const tick = () => {
+          window.__drift.push(Math.round(
+            Math.max(app.scrollTop, -document.querySelector(".topbar").getBoundingClientRect().top)));
+          if (window.__drift.length < 45) requestAnimationFrame(tick);
+        };
+        requestAnimationFrame(tick);
+      });
+
+      for (const [label, id] of [["календарь", "calBtn"], ["легенда", "legBtn"], ["прогноз", "fcBtn"]]) {
+        await watch();
+        await page.locator(`#${id}`).click();
+        await page.waitForTimeout(700);
+        const drift = await page.evaluate(() => Math.max(...window.__drift));
+        check(`${label}: фон стоит на месте`, drift === 0, `сдвиг ${drift}px`);
+
+        await watch();
+        await page.keyboard.press("Escape");
+        await page.waitForTimeout(700);
+        const back = await page.evaluate(() => Math.max(...window.__drift));
+        check(`${label}: фон стоит и при закрытии`, back === 0, `сдвиг ${back}px`);
+      }
+
+      await context.close();
+    }
+
   } finally {
     await browser.close();
     server.kill();

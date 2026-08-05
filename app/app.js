@@ -308,6 +308,25 @@ function focusables(root) {
   )].filter((n) => n.offsetParent !== null);
 }
 
+/*
+ * Фокус — только так, без исключений.
+ *
+ * Обычный focus() велит браузеру доскроллить до элемента, а шторка в момент
+ * открытия ещё за нижним краем экрана (translateY(101%)). Браузер честно
+ * прокручивал .app на 374px — весь интерфейс уезжал вверх и потом полз
+ * обратно, пока шторка выезжала. Со стороны это читалось как дрожь фона.
+ * `overflow: hidden` от такого скролла не спасает: он запрещает скролл
+ * пальцем, а не программный.
+ *
+ * scrollTop сбрасывается следом, потому что доскроллить контейнер может не
+ * только фокус (например, экранная клавиатура), а .app не скроллится никогда.
+ */
+function focusQuietly(node) {
+  if (!node) return;
+  node.focus({ preventScroll: true });
+  if (dom.app.scrollTop !== 0) dom.app.scrollTop = 0;
+}
+
 function openSheet(name) {
   if (openSheetName) closeSheets();      // одновременно открытых быть не может
   const sheet = sheets[name];
@@ -321,8 +340,7 @@ function openSheet(name) {
   for (const n of BACKGROUND()) n.inert = true;
   openSheetName = name;
 
-  const first = focusables(sheet)[0];
-  if (first) first.focus();
+  focusQuietly(focusables(sheet)[0]);
 }
 
 function closeSheets() {
@@ -337,7 +355,9 @@ function closeSheets() {
   dom.scrim.classList.remove("on");
   for (const n of BACKGROUND()) n.inert = false;
   openSheetName = null;
-  if (lastFocused && lastFocused.isConnected) lastFocused.focus();
+  // Тоже без прокрутки: вернуть фокус на строку дня — значит доскроллить
+  // до неё колоду, а колода листает дни, и день бы уехал.
+  if (lastFocused && lastFocused.isConnected) focusQuietly(lastFocused);
   lastFocused = null;
 }
 
@@ -350,10 +370,10 @@ function trapFocus(event) {
   const last = list[list.length - 1];
   if (event.shiftKey && document.activeElement === first) {
     event.preventDefault();
-    last.focus();
+    focusQuietly(last);
   } else if (!event.shiftKey && document.activeElement === last) {
     event.preventDefault();
-    first.focus();
+    focusQuietly(first);
   }
 }
 

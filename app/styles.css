@@ -22,11 +22,19 @@
   --accent:    #4E44B8;
   --accent-bg: #EAE8FA;
   --good:      #3F8B4C;
-  --neutral:   #A8801A;
+  --neutral:   #FFD11A;
   --bad:       #B23B33;
   --good-t:    rgba(63,139,76,.10);
-  --neutral-t: rgba(168,128,26,.11);
+  --neutral-t: rgba(255,209,26,.16);
   --bad-t:     rgba(178,59,51,.10);
+  /*
+   * Жёлтый в таблице — заливка (FFE599 / FFFF99), и плашка обязана читаться
+   * так же. Но тот же цвет буквами на светлом фоне не прочитать, поэтому
+   * у нейтрального два токена: --neutral красит заливку, --neutral-ink —
+   * текст. Один общий заставил бы выбирать между грязным жёлтым на плашке
+   * и нечитаемой плашкой состояния.
+   */
+  --neutral-ink: #8A6A00;
   --moon-lit:  #3A3D52;
   --moon-dark: #D3D4E0;
   --sky:       #E2E3EE;
@@ -63,11 +71,12 @@
     --accent:    #A99CFA;
     --accent-bg: #241F3E;
     --good:      #5FB56E;
-    --neutral:   #CFA93F;
+    --neutral:   #F2C425;
     --bad:       #DE6459;
     --good-t:    rgba(95,181,110,.13);
-    --neutral-t: rgba(207,169,63,.13);
+    --neutral-t: rgba(242,196,37,.14);
     --bad-t:     rgba(222,100,89,.14);
+    --neutral-ink: #E5C24E;
     --moon-lit:  #F1EEE3;
     --moon-dark: #23273A;
     --sky:       #0E1018;
@@ -175,7 +184,7 @@ button {
   border: 1px solid transparent;
 }
 .banner-info { background: var(--accent-bg); color: var(--accent); }
-.banner-warn { background: var(--neutral-t); color: var(--neutral); border-color: var(--neutral-t); }
+.banner-warn { background: var(--neutral-t); color: var(--neutral-ink); border-color: var(--neutral-t); }
 .banner-error { background: var(--bad-t); color: var(--bad); }
 .banner button {
   margin-left: auto; font-size: 12.5px; font-weight: 620;
@@ -266,9 +275,6 @@ button {
 .chip[data-c="neutral"] { background: var(--neutral); color: #16130A; }
 .chip[data-c="bad"]     { background: var(--bad); }
 .chip[data-c="none"]    { background: transparent; border: 1.5px dashed var(--line); }
-@media (prefers-color-scheme: dark) {
-  .chip[data-c="neutral"] { color: #16130A; }
-}
 
 /* Незаполненный месяц: строки августа не показываются ни при каких условиях */
 .empty-month {
@@ -328,7 +334,10 @@ button {
 .scrim {
   position: absolute; inset: 0; background: var(--scrim);
   z-index: var(--z-scrim);
-  opacity: 0; pointer-events: none; transition: opacity .24s ease;
+  /* Затемнение и выезд идут одной длительностью с одной кривой: врозь фон
+     темнел раньше шторки, и открытие читалось как два отдельных движения. */
+  opacity: 0; pointer-events: none;
+  transition: opacity .34s cubic-bezier(.33,1,.68,1);
 }
 .scrim.on { opacity: 1; pointer-events: auto; }
 
@@ -341,7 +350,13 @@ button {
   z-index: var(--z-sheet);
   display: flex; flex-direction: column;
   transform: translateY(101%);
-  transition: transform .3s cubic-bezier(.32,.72,0,1);
+  /*
+   * ease-out без разгона: шторка сразу идёт с полной скоростью и мягко
+   * тормозит у края. Прежняя кривая с почти нулевым хвостом (…,0,1) на
+   * телефоне выглядела рывком в конце.
+   */
+  transition: transform .34s cubic-bezier(.33,1,.68,1);
+  will-change: transform;      /* свой слой: иначе перекрашивается весь экран */
   box-shadow: var(--shadow-lg);
   padding-bottom: var(--safe-bottom);
 }
@@ -360,6 +375,9 @@ button {
 /* У шторок собственный скролл: прогноз месяца бывает длинным */
 .sheet-body {
   flex: 1 1 auto; overflow-y: auto; -webkit-overflow-scrolling: touch;
+  /* Докрутив прогноз до конца, палец продолжал тянуть страницу под шторкой —
+     на iOS это выглядит как подпрыгивающий фон. Цепочку обрываем здесь. */
+  overscroll-behavior: contain;
   padding: 16px; display: flex; flex-direction: column; gap: 20px;
 }
 
