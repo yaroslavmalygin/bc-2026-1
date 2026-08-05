@@ -59,6 +59,30 @@ def norm_text(value):
     return re.sub(r"\s+", " ", text).strip()
 
 
+def as_day_number(value):
+    """Число месяца из ячейки, или None если это не целое число.
+
+    Выгрузка Google Sheets отдаёт числа как 1.0, а не 1: наивный
+    int(str(value)) на такой ячейке падает, и весь блок перестаёт
+    опознаваться — заголовок есть, а нумерации под ним «нет». Календарь
+    развалился бы целиком, причём с сообщением про раскладку.
+    """
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value) if value.is_integer() else None
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        try:
+            number = float(str(value).strip())
+        except (TypeError, ValueError):
+            return None
+        return int(number) if number.is_integer() else None
+
+
 def month_key(y, m):
     return f"{y:04d}-{m:02d}"
 
@@ -77,67 +101,22 @@ def iter_months(start, count):
 
 
 # ===========================================================================
-# Выбор листа
+# Выбор листов
 # ===========================================================================
 
-def find_calendar_sheet(wb, autodetect=False):
-    """Ищем лист с блоками месяцев — по умолчанию строго по имени.
+def find_legend_sheet(wb, calendar_sheets):
+    """Лист легенды — любой лист, не занятый блоками месяцев.
 
-    Автоопределение выключено намеренно. Переименованный лист означает, что
-    структура книги поехала, и молча разобрать «похожий» лист — ровно тот
-    тихий сбой, ради предотвращения которого написан весь этот конвертер.
-    Осознанный обход есть: --allow-sheet-autodetect.
+    Исключаются ВСЕ календарные листы, а не один: в раскладке «вкладка на
+    месяц» их дюжина, и запасной вариант «первый лист, кроме календарного»
+    вернул бы вкладку сентября вместо легенды.
     """
-    pattern = re.compile(cfg.MONTH_TITLE_PATTERN)
-
-    def has_blocks(ws):
-        found = 0
-        for row in ws.iter_rows(min_col=cfg.COL_LABEL, max_col=cfg.COL_LABEL,
-                                max_row=min(ws.max_row, 400)):
-            text = norm_text(row[0].value)
-            if text:
-                m = pattern.match(text)
-                if m and m.group(1) in cfg.MONTH_NAMES:
-                    found += 1
-        return found
-
-    for name in cfg.CALENDAR_SHEET_CANDIDATES:
-        if name in wb.sheetnames and has_blocks(wb[name]):
-            return wb[name]
-
-    matches = [ws for ws in wb.worksheets if has_blocks(ws) >= 2]
-
-    if not autodetect:
-        hint = (f"Похоже на календарь: {', '.join(ws.title for ws in matches)}. "
-                if matches else "Ни один лист не похож на календарь. ")
-        raise ConvertError(
-            "не найден лист календаря ни под одним из ожидаемых имён: "
-            f"{', '.join(cfg.CALENDAR_SHEET_CANDIDATES)}.\n"
-            f"В книге есть листы: {', '.join(wb.sheetnames)}.\n"
-            + hint +
-            "Переименуйте лист обратно, добавьте его имя в "
-            "CALENDAR_SHEET_CANDIDATES или запустите с флагом "
-            "--allow-sheet-autodetect, если уверены.")
-
-    if len(matches) == 1:
-        warn(f"лист календаря определён автоматически: «{matches[0].title}»")
-        return matches[0]
-    if not matches:
-        raise ConvertError(
-            "не найден лист с блоками месяцев. "
-            f"В книге есть: {', '.join(wb.sheetnames)}")
-    raise ConvertError(
-        "блоки месяцев найдены сразу на нескольких листах: "
-        f"{', '.join(ws.title for ws in matches)}. "
-        "Укажите нужный в CALENDAR_SHEET_CANDIDATES.")
-
-
-def find_legend_sheet(wb, calendar_ws):
+    used = set(calendar_sheets)
     for name in cfg.LEGEND_SHEET_CANDIDATES:
-        if name in wb.sheetnames and wb[name] is not calendar_ws:
+        if name in wb.sheetnames and wb[name] not in used:
             return wb[name]
     for ws in wb.worksheets:
-        if ws is not calendar_ws:
+        if ws not in used:
             return ws
     return None
 
@@ -146,12 +125,25 @@ def find_legend_sheet(wb, calendar_ws):
 # Условное форматирование
 # ===========================================================================
 
-def check_conditional_formatting(ws, blocks, client):
+def check_conditional_formatting(blocks, client):
     """Останавливаемся, только если правило задевает сами данные.
 
     Безобидное правило в легенде или служебной части листа блокировать
     работу не должно — проверяем прицельно, по пересечению диапазонов.
+
+    Обход идёт по листам, а не по одному листу: в раскладке «вкладка на
+    месяц» правило на июньской вкладке прошло бы мимо проверки, которая
+    смотрит только на первую, и месяц вышел бы обесцвеченным.
     """
+    by_sheet = defaultdict(list)
+    for b in blocks:
+        by_sheet[b["ws"].title].append(b)
+    for sheet_blocks in by_sheet.values():
+        _check_conditional_formatting_sheet(
+            sheet_blocks[0]["ws"], sheet_blocks, client)
+
+
+def _check_conditional_formatting_sheet(ws, blocks, client):
     try:
         rules = list(ws.conditional_formatting)
     except Exception:
@@ -180,8 +172,8 @@ def check_conditional_formatting(ws, blocks, client):
 
     if hits:
         raise ConvertError(
-            "на календарных данных стоит условное форматирование: "
-            f"{', '.join(sorted(set(hits)))}.\n"
+            f"на листе «{ws.title}» на календарных данных стоит условное "
+            f"форматирование: {', '.join(sorted(set(hits)))}.\n"
             "openpyxl видит только обычные заливки, поэтому цвет, созданный "
             "правилом, потеряется и календарь выйдет обесцвеченным.\n"
             "Замените условное форматирование обычной заливкой ячеек.")
@@ -200,16 +192,21 @@ def _looks_like_title_row(ws, row_idx):
     дней с единицы. У двух самозванцев там окажется строка активностей.
     """
     probe = ws.cell(row=row_idx + cfg.OFFSET_DATES, column=cfg.COL_FIRST_DAY).value
-    try:
-        return int(str(probe).strip()) == 1
-    except (TypeError, ValueError):
-        return False
+    return as_day_number(probe) == 1
 
 
-def find_blocks(ws):
+def find_blocks_on_sheet(ws, client):
+    """Блоки месяцев одного листа, сверху вниз. Пустой список — не ошибка.
+
+    Каждому блоку сразу считается окно поиска статуса: от конца предыдущего
+    блока до конца своего. Фиксированного смещения у статуса нет — в стопке
+    блоков он стоит в строке заголовка, а во вкладке на месяц строкой выше,
+    над блоком, и обе раскладки настоящие.
+    """
     pattern = re.compile(cfg.MONTH_TITLE_PATTERN)
     blocks = []
     rejected = 0
+    previous_end = 0
 
     for row_idx in range(1, ws.max_row + 1):
         text = norm_text(ws.cell(row=row_idx, column=cfg.COL_LABEL).value)
@@ -224,34 +221,109 @@ def find_blocks(ws):
         if not _looks_like_title_row(ws, row_idx):
             rejected += 1
             continue
+        first_activity_row = row_idx + cfg.OFFSET_FIRST_ACTIVITY
+        block_end = first_activity_row + client.activity_row_count - 1
         blocks.append({
+            "ws": ws,
             "title_row": row_idx,
             "title": text,
             "year": year,
             "month": cfg.MONTH_NAMES[name],
             "note_row": row_idx + cfg.OFFSET_NOTE,
             "dates_row": row_idx + cfg.OFFSET_DATES,
-            "first_activity_row": row_idx + cfg.OFFSET_FIRST_ACTIVITY,
+            "first_activity_row": first_activity_row,
+            "status_from": previous_end + 1,
+            "status_to": block_end,
         })
+        previous_end = block_end
 
-    if not blocks:
+    if not blocks and rejected:
         raise ConvertError(
-            "на листе календаря не найдено ни одного блока месяца.\n"
-            f"Заголовков месяцев встречено {rejected}, но ни под одним из них "
-            f"через {cfg.OFFSET_DATES} строк нет нумерации дней с единицы — "
-            "похоже, раскладка блока изменилась.")
+            f"на листе «{ws.title}» заголовков месяцев встречено {rejected}, "
+            f"но ни под одним из них через {cfg.OFFSET_DATES} строк нет "
+            "нумерации дней с единицы — похоже, раскладка блока изменилась.")
     return blocks
 
 
-def read_status(ws, block, next_title_row):
-    """STATUS: READY в колонке A, между заголовком месяца и следующим.
+def collect_blocks(wb, client, autodetect=False):
+    """Блоки всей книги плюс список листов, которые их держат.
 
-    Ровно один статус на блок. Опечатка вроде «STATUS: REDY» — ошибка,
+    Раскладок две, и различаются они только тем, как блоки разложены по
+    листам:
+
+      стопка блоков   — один лист «Календарь», месяцы идут сверху вниз;
+      вкладка на месяц — лист легенды и дальше по вкладке на каждый месяц,
+                         ровно один блок на вкладке. Так устроен настоящий
+                         файл астролога.
+
+    Имя вкладки не проверяется намеренно: месяц определяется заголовком в
+    колонке B, а вкладка в настоящем файле называется «Февраля 2027» при
+    заголовке «ФЕВРАЛЬ 2027». Подстраховка не в имени, а в validate_range:
+    набор месяцев обязан совпасть с объявленным в конфиге клиента.
+    """
+    with_blocks = []
+    for ws in wb.worksheets:
+        found = find_blocks_on_sheet(ws, client)
+        if found:
+            with_blocks.append((ws, found))
+
+    # Стопка блоков: лист под ожидаемым именем. Проверяется первой, чтобы
+    # книга старого образца читалась ровно как раньше.
+    for name in cfg.CALENDAR_SHEET_CANDIDATES:
+        for ws, blocks in with_blocks:
+            if ws.title == name:
+                return blocks, [ws], f"стопка блоков на листе «{ws.title}»"
+
+    # Вкладка на месяц: на каждом листе ровно по одному блоку.
+    if len(with_blocks) >= 2 and all(len(b) == 1 for _, b in with_blocks):
+        return ([b[0] for _, b in with_blocks],
+                [ws for ws, _ in with_blocks],
+                f"вкладка на месяц ({len(with_blocks)} вкладок)")
+
+    stacked = [(ws, b) for ws, b in with_blocks if len(b) >= 2]
+
+    if autodetect and len(stacked) == 1:
+        ws, blocks = stacked[0]
+        warn(f"лист календаря определён автоматически: «{ws.title}»")
+        return blocks, [ws], f"стопка блоков на листе «{ws.title}»"
+
+    if not with_blocks:
+        raise ConvertError(
+            "в книге не нашлось ни одного блока месяца.\n"
+            f"Есть листы: {', '.join(wb.sheetnames)}.\n"
+            "Ожидается либо лист со стопкой блоков, либо вкладка на каждый "
+            "месяц; заголовок месяца — в колонке B, вида «АВГУСТ 2026».")
+
+    listing = ", ".join(f"«{ws.title}» ({len(b)})" for ws, b in with_blocks)
+
+    if stacked:
+        raise ConvertError(
+            "не найден лист календаря ни под одним из ожидаемых имён: "
+            f"{', '.join(cfg.CALENDAR_SHEET_CANDIDATES)}.\n"
+            f"Блоки месяцев лежат на: {listing}.\n"
+            "Переименуйте лист обратно, добавьте его имя в "
+            "CALENDAR_SHEET_CANDIDATES или запустите с флагом "
+            "--allow-sheet-autodetect, если уверены.")
+
+    raise ConvertError(
+        "раскладка книги не опознана: блоки месяцев разложены по листам "
+        f"вперемешку — {listing}.\n"
+        "Ожидается либо все месяцы стопкой на одном листе, либо ровно один "
+        "месяц на вкладке.")
+
+
+def read_status(block):
+    """STATUS: READY в колонке A, в пределах блока.
+
+    Окно поиска считается в find_blocks_on_sheet и тянется от конца
+    предыдущего блока до конца своего. Фиксированной строки у статуса нет:
+    в стопке блоков он стоит в строке заголовка, во вкладке на месяц — над
+    ней. Ровно один статус на блок; опечатка вроде «STATUS: REDY» — ошибка,
     чтобы она не превращалась молча в «месяц не заполнен».
     """
-    stop = next_title_row if next_title_row else ws.max_row + 1
+    ws = block["ws"]
     found = []
-    for r in range(block["title_row"], stop):
+    for r in range(block["status_from"], block["status_to"] + 1):
         text = norm_text(ws.cell(row=r, column=cfg.COL_STATUS).value)
         if text:
             found.append((r, text))
@@ -274,13 +346,14 @@ def read_status(ws, block, next_title_row):
     return True
 
 
-def read_dates_row(ws, block):
+def read_dates_row(block):
     """Числа месяца с проверкой непрерывности и длины.
 
     Ширина блока заранее не предполагается: месяцы бывают по 28, 30 и 31
     дню, а шаблон сделан копированием августа — оставшаяся от него лишняя
     «31» ловится именно здесь.
     """
+    ws = block["ws"]
     row = block["dates_row"]
     title = block["title"]
     found = []
@@ -289,9 +362,8 @@ def read_dates_row(ws, block):
         value = ws.cell(row=row, column=col).value
         if value is None or (isinstance(value, str) and not value.strip()):
             continue
-        try:
-            num = int(str(value).strip())
-        except (TypeError, ValueError):
+        num = as_day_number(value)
+        if num is None:
             raise ConvertError(
                 f"{title}: в строке дат {cell_ref(row, col)} значение «{value}» — не число.")
         found.append((col, num))
@@ -327,12 +399,26 @@ def read_dates_row(ws, block):
     return day_to_col, last_col
 
 
-def check_nothing_beyond(ws, block, last_col, resolver, client):
-    """Справа от последнего дня не должно быть ни отметок, ни заливок.
+def is_blank_fill(hex6, kind):
+    """Заливка, неотличимая от пустой ячейки: её нет либо она белая.
+
+    Выгрузка Google Sheets красит белым запас колонок за таблицей — после
+    каждого месяца настоящего файла идёт такая колонка. На экране она ничем
+    не отличается от пустой, поэтому следом копии месяца считаться не может.
+    """
+    if hex6 is None or kind == "none":
+        return True
+    return cfg.PALETTE_DATES.get(hex6.upper()) == "plain"
+
+
+def check_nothing_beyond(block, last_col, resolver, client):
+    """Справа от последнего дня не должно быть ни отметок, ни цветных заливок.
 
     Ловит остатки августовской копии: число стёрли, а зелёный фон 31-й
-    колонки остался.
+    колонки остался. Белая заливка при этом остатком не считается — см.
+    is_blank_fill.
     """
+    ws = block["ws"]
     title = block["title"]
     rows = [block["dates_row"]] + [block["first_activity_row"] + i
                                    for i in range(client.activity_row_count)]
@@ -341,7 +427,7 @@ def check_nothing_beyond(ws, block, last_col, resolver, client):
         for col in range(last_col + 1, last_col + 1 + 4):
             cell = ws.cell(row=r, column=col)
             hex6, kind = describe_fill(cell, resolver)
-            if norm_text(cell.value) or (hex6 and kind != "none"):
+            if norm_text(cell.value) or not is_blank_fill(hex6, kind):
                 leftovers.append(cell_ref(r, col))
     if leftovers:
         raise ConvertError(
@@ -366,11 +452,13 @@ def parse_marks(raw, title, ref, client):
         return ""
 
     known = client.known_marks
+    case_aliases = client.mark_case_aliases
     out = []
     for ch in text:
         if ch == " ":
             continue
         ch = cfg.HOMOGLYPHS.get(ch, ch)
+        ch = case_aliases.get(ch, ch)
         if ch not in known:
             raise ConvertError(
                 f"{title}: в {ref} встретился неизвестный символ «{ch}» "
@@ -405,12 +493,13 @@ def bucket_for(hex6, kind, palette, title, ref, zone):
 # Разбор блока
 # ===========================================================================
 
-def parse_block(ws, block, next_title_row, resolver, client):
+def parse_block(block, resolver, client):
+    ws = block["ws"]
     title = block["title"]
     count = client.activity_row_count
-    ready = read_status(ws, block, next_title_row)
-    day_to_col, last_col = read_dates_row(ws, block)
-    check_nothing_beyond(ws, block, last_col, resolver, client)
+    ready = read_status(block)
+    day_to_col, last_col = read_dates_row(block)
+    check_nothing_beyond(block, last_col, resolver, client)
 
     note = norm_text(ws.cell(row=block["note_row"], column=cfg.COL_LABEL).value)
 
@@ -732,15 +821,16 @@ def scrub(text):
 # Режим --report-colors
 # ===========================================================================
 
-def report_colors(ws, blocks, resolver, client):
+def report_colors(blocks, resolver, client):
     head("Заливки, встреченные в файле")
 
     zones = {"строка дат": defaultdict(list), "активности": defaultdict(list)}
     kinds = Counter()
 
     for block in blocks:
+        ws = block["ws"]
         try:
-            day_to_col, _ = read_dates_row(ws, block)
+            day_to_col, _ = read_dates_row(block)
         except ConvertError as exc:
             warn(f"{block['title']}: строку дат разобрать не удалось ({exc}); "
                  "блок пропущен в отчёте")
@@ -789,21 +879,17 @@ def convert(xlsx_path, out_path, client, report_only=False, autodetect=False):
     wb = load_workbook(xlsx_path, data_only=True)
     resolver = ThemeResolver(wb)
 
-    ws = find_calendar_sheet(wb, autodetect=autodetect)
-    info(f"лист календаря: «{ws.title}»")
-    blocks = find_blocks(ws)
+    blocks, calendar_sheets, layout = collect_blocks(wb, client, autodetect=autodetect)
+    info(f"раскладка книги: {layout}")
     info(f"найдено блоков месяцев: {len(blocks)}")
 
     if report_only:
-        report_colors(ws, blocks, resolver, client)
+        report_colors(blocks, resolver, client)
         return None
 
-    check_conditional_formatting(ws, blocks, client)
+    check_conditional_formatting(blocks, client)
 
-    parsed = []
-    for i, block in enumerate(blocks):
-        nxt = blocks[i + 1]["title_row"] if i + 1 < len(blocks) else None
-        parsed.append(parse_block(ws, block, nxt, resolver, client))
+    parsed = [parse_block(block, resolver, client) for block in blocks]
 
     august = next((m for m in parsed if m["key"] == "2026-08"), None)
     august_signature = (json.dumps(august["days"], sort_keys=True, ensure_ascii=False)
@@ -822,7 +908,7 @@ def convert(xlsx_path, out_path, client, report_only=False, autodetect=False):
     validate_range(parsed, days, client)
 
     moon_events, moon_gaps = build_moon(parsed, client)
-    legend = build_legend(parse_legend(find_legend_sheet(wb, ws), client),
+    legend = build_legend(parse_legend(find_legend_sheet(wb, calendar_sheets), client),
                           used_marks, client)
 
     payload = {

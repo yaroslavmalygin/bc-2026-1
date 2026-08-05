@@ -19,8 +19,14 @@
 Диапазон и набор строк книга берёт из конфига клиента (--client), а не из
 собственных констант: у разных клиентов они разные, см. tools/client_config.py.
 
+Раскладок книги две, и генератор умеет обе (--layout):
+
+  tabs      вкладка на каждый месяц плюс лист легенды — так устроен
+            настоящий файл астролога;
+  stacked   все месяцы стопкой на одном листе «Календарь».
+
 Августовские буквы (О, ОХ, КУ, Ф+, Р+, у, В, Т) взяты из настоящей таблицы
-один в один. Цвета — провизорные, см. PROVISIONAL_PALETTE в calendar_config.
+один в один, цвета — из подтверждённой палитры calendar_config.
 """
 
 import argparse
@@ -57,8 +63,9 @@ AUGUST_MARKS = {
     "massage":      {d: ("Т" if 13 <= d <= 27 else "В") for d in range(1, 32)},
 }
 
-# Цвета августа диапазонами [от, до, корзина]. Сняты с исходного изображения,
-# помечены как провизорные и будут заменены после сверки с реальным .xlsx.
+# Цвета августа диапазонами [от, до, корзина]. Сняты с исходного изображения
+# ещё до настоящего файла — точной копией августа 2026 не являются, книга
+# нужна тестам, а не как источник данных.
 AUGUST_COLORS = {
     "negotiations": [(1, 2, "neutral"), (3, 13, "good"), (14, 14, "neutral"),
                      (15, 16, "bad"), (17, 17, "neutral"), (18, 23, "good"), (24, 31, "bad")],
@@ -249,7 +256,15 @@ def august_colors_by_day():
 # Запись блока месяца
 # ---------------------------------------------------------------------------
 
-def write_month_block(ws, top, year, month, colors, marks, note, ready, moon_by_day, client):
+def write_month_block(ws, top, year, month, colors, marks, note, ready, moon_by_day,
+                      client, status_row=None):
+    """Пишет блок месяца начиная со строки top и возвращает строку следующего.
+
+    status_row задаётся отдельно от top: в стопке блоков статус стоит в
+    строке заголовка, а во вкладке на месяц — строкой выше, над блоком.
+    Так устроен настоящий файл астролога, и подгонять его под генератор
+    смысла нет — читатель обязан понимать обе раскладки.
+    """
     n = calendar.monthrange(year, month)[1]
     last_col = cfg.COL_FIRST_DAY + n - 1
 
@@ -257,7 +272,8 @@ def write_month_block(ws, top, year, month, colors, marks, note, ready, moon_by_
     ws.cell(row=top, column=cfg.COL_LABEL, value=title).font = Font(bold=True, size=13)
 
     if ready:
-        ws.cell(row=top, column=cfg.COL_STATUS, value=cfg.STATUS_READY)
+        ws.cell(row=status_row if status_row else top,
+                column=cfg.COL_STATUS, value=cfg.STATUS_READY)
 
     note_row = top + cfg.OFFSET_NOTE
     ws.cell(row=note_row, column=cfg.COL_LABEL, value=note)
@@ -336,7 +352,14 @@ def write_legend(ws, client):
 # Сборка книги
 # ---------------------------------------------------------------------------
 
-def build(path, client, mode="demo"):
+def setup_columns(ws):
+    ws.column_dimensions["A"].width = 16
+    ws.column_dimensions["B"].width = 30
+    for i in range(cfg.COL_FIRST_DAY, cfg.COL_FIRST_DAY + cfg.MAX_DAYS):
+        ws.column_dimensions[get_column_letter(i)].width = 4.5
+
+
+def build(path, client, mode="demo", layout="stacked"):
     start = client.start_date
     end = client.end_date
 
@@ -358,11 +381,9 @@ def build(path, client, mode="demo"):
     legend.title = cfg.LEGEND_SHEET_CANDIDATES[0]
     write_legend(legend, client)
 
-    ws = wb.create_sheet(cfg.CALENDAR_SHEET_CANDIDATES[0])
-    ws.column_dimensions["A"].width = 16
-    ws.column_dimensions["B"].width = 30
-    for i in range(cfg.COL_FIRST_DAY, cfg.COL_FIRST_DAY + cfg.MAX_DAYS):
-        ws.column_dimensions[get_column_letter(i)].width = 4.5
+    stacked = wb.create_sheet(cfg.CALENDAR_SHEET_CANDIDATES[0]) if layout == "stacked" else None
+    if stacked is not None:
+        setup_columns(stacked)
 
     rng = random.Random(20260801)
     aug_colors = august_colors_by_day()
@@ -383,8 +404,16 @@ def build(path, client, mode="demo"):
         else:
             colors, marks, note, ready = {}, {}, cfg.PLACEHOLDER_NOTE, False
 
-        top = write_month_block(ws, top, y, m, colors, marks, note, ready,
-                                moon_by_day, client)
+        if stacked is not None:
+            top = write_month_block(stacked, top, y, m, colors, marks, note, ready,
+                                    moon_by_day, client)
+        else:
+            ws = wb.create_sheet(f"{cfg.MONTH_TITLES_RU[m]} {y}")
+            setup_columns(ws)
+            write_month_block(ws, cfg.TABS_TITLE_ROW, y, m, colors, marks, note,
+                              ready, moon_by_day, client,
+                              status_row=cfg.TABS_STATUS_ROW)
+
         m += 1
         if m == 13:
             m, y = 1, y + 1
@@ -397,6 +426,9 @@ def main():
     root = Path(__file__).resolve().parents[1]
     ap = argparse.ArgumentParser(description="Генератор эталонной книги календаря")
     ap.add_argument("--mode", choices=["template", "demo"], default="template")
+    ap.add_argument("--layout", choices=["stacked", "tabs"], default="tabs",
+                    help="tabs — вкладка на месяц, как в настоящем файле "
+                         "астролога; stacked — стопка блоков на одном листе")
     ap.add_argument("--client",
                     default=str(root / "tests" / "fixtures" / "client-test.json"),
                     help="конфиг клиента, по которому строится книга")
@@ -413,10 +445,10 @@ def main():
         root / ".tmp" / f"reference-{args.mode}.xlsx")
     out.parent.mkdir(parents=True, exist_ok=True)
 
-    total_events, moon_by_day = build(out, client, mode=args.mode)
+    total_events, moon_by_day = build(out, client, mode=args.mode, layout=args.layout)
 
     print(f"Записано: {out}")
-    print(f"Режим: {args.mode}")
+    print(f"Режим: {args.mode}, раскладка: {args.layout}")
     print(f"Клиент: {args.client}")
     print(f"Диапазон: {client.range_start} … {client.range_end} "
           f"({client.expected_months} мес., {client.expected_days} дн.)")

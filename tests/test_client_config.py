@@ -197,17 +197,20 @@ def _():
     # Блоки ищем логикой самого конвертера: заголовок месяца продублирован
     # в строках дней недели и дат, и наивный подсчёт совпадений дал бы втрое
     # больше блоков, чем их есть.
-    from xlsx_to_calendar_json import find_blocks
+    from xlsx_to_calendar_json import collect_blocks
 
     client = load_client(ROOT / "tests" / "fixtures" / "client-test.json")
     WORK.mkdir(parents=True, exist_ok=True)
-    path = WORK / "ref-from-config.xlsx"
-    build(path, client, mode="demo")
 
-    wb = load_workbook(path)
-    ws = wb[cfg_mod.CALENDAR_SHEET_CANDIDATES[0]]
-    blocks = find_blocks(ws)
-    assert len(blocks) == client.expected_months, f"блоков {len(blocks)}"
+    # Обе раскладки книги обязаны дать одинаковое число блоков: месяцев
+    # столько, сколько объявил конфиг, а разложены они по листам или по
+    # вкладкам — дело книги, а не клиента.
+    for layout in ("stacked", "tabs"):
+        path = WORK / f"ref-from-config-{layout}.xlsx"
+        build(path, client, mode="demo", layout=layout)
+        blocks, _, _ = collect_blocks(load_workbook(path), client)
+        assert len(blocks) == client.expected_months, \
+            f"{layout}: блоков {len(blocks)}"
 
 
 def main():

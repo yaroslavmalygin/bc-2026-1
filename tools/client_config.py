@@ -84,6 +84,23 @@ class ClientConfig:
         return list(cfg.KNOWN_MARKS) + list(self.extra_marks.keys())
 
     @property
+    def mark_case_aliases(self):
+        """Строчные написания символов, у которых строчная форма не занята.
+
+        В таблице астролога холостой ход луны набран то «Х», то «х», и это
+        описка, а не второй символ. Но лечить её сплошным upper() нельзя:
+        «У» (день удачи) и «у» (зуб) — разные символы каталога, и сплошное
+        приведение регистра слепило бы их, поставив день удачи в строку
+        зубов. Поэтому регистр поднимается только там, где строчная форма
+        не занята, а набор считается по каталогу вместе с extraMarks, а не
+        задаётся отдельным списком: иначе новая буква клиента ушла бы из-под
+        защиты молча.
+        """
+        known = set(self.known_marks)
+        return {ch.lower(): ch for ch in self.known_marks
+                if ch.upper() == ch and ch.lower() != ch and ch.lower() not in known}
+
+    @property
     def mark_texts(self):
         merged = dict(cfg.MARK_TEXTS_FALLBACK)
         merged.update(self.extra_marks)

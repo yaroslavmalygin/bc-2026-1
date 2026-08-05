@@ -77,7 +77,8 @@ python tools/xlsx_to_calendar_json.py NN
 «Предварительные данные», и это не финальный календарь.
 
 **Статусы месяцев.** Заполненность определяется маркером `STATUS: READY`
-в колонке **A**, в той же строке, где заголовок месяца в колонке B. Нет
+в колонке **A** в пределах блока месяца: в стопке блоков — в строке
+заголовка, во вкладке на месяц — строкой выше, над заголовком. Нет
 маркера — месяц считается незаполненным, и приложение вместо строк напишет
 «Данные на этот месяц ещё не заполнены». Соврать данными другого месяца оно
 не может по построению.
@@ -87,7 +88,7 @@ python tools/xlsx_to_calendar_json.py NN
 ```bash
 python tests/test_client_config.py   # конфиг клиента
 python tests/test_build_client.py    # генератор сборок
-python tests/test_converter.py       # 19 сломанных книг
+python tests/test_converter.py       # сломанные книги и обе раскладки
 node   tests/test_dates.mjs --all-zones
 node   tests/test_client_id.mjs      # идентификатор из адреса
 node   tests/test_app.mjs            # приложение в браузере

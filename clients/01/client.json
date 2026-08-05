@@ -1,5 +1,5 @@
 {
-  "range": { "start": "2026-08-01", "end": "2027-08-31" },
+  "range": { "start": "2026-08-01", "end": "2027-07-31" },
   "rows": [
     { "id": "negotiations", "label": "Важные переговоры и выступления", "short": "Переговоры" },
     { "id": "finance", "label": "Финансы, перечисления, инвестиции", "short": "Финансы" },
@@ -13,6 +13,6 @@
   "extraMarks": {},
   "moonAnchors": {
     "before": { "date": "2026-07-29", "type": "full" },
-    "after": { "date": "2027-09-16", "type": "full" }
+    "after": { "date": "2027-08-02", "type": "new" }
   }
 }
