@@ -929,9 +929,11 @@ def convert(xlsx_path, out_path, client, report_only=False, autodetect=False):
     payload["dataHash"] = compute_hash(payload)
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
+    # newline="\n": иначе на Windows файл ложится в CRLF, а в гите лежит в LF,
+    # и после checkout безобидный перегон данных выглядел бы как правка.
     out_path.write_text(
         json.dumps(payload, ensure_ascii=False, indent=1, sort_keys=False),
-        encoding="utf-8")
+        encoding="utf-8", newline="\n")
 
     return payload
 

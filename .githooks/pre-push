@@ -1,0 +1,148 @@
+#!/bin/sh
+#
+# Последний рубеж перед публикацией.
+#
+# GitHub Pages раздаёт docs/ прямо из main, поэтому push — это и есть выкладка
+# клиенту: промежуточной среды нет. Откатывать пришлось бы уже на живом
+# адресе, а пока откат едет, человек с иконкой на телефоне видит сломанное
+# приложение — и офлайн не увидит даже исправления. Поэтому проверки стоят
+# здесь, а не в памяти того, кто пушит.
+#
+# Ставится один раз на клон:
+#     git config core.hooksPath .githooks
+#
+# Осознанно обойти:  git push --no-verify
+#
+# Живого сайта хук не касается: tests/test_live.mjs бьёт по уже
+# опубликованному адресу и до push проверять там нечего.
+
+ROOT=$(git rev-parse --show-toplevel) || exit 1
+cd "$ROOT" || exit 1
+
+RED='\033[31m'
+GREEN='\033[32m'
+DIM='\033[2m'
+BOLD='\033[1m'
+RESET='\033[0m'
+
+failed=0
+
+say()  { printf "%b\n" "$1"; }
+good() { printf "  %b✓%b %s\n" "$GREEN" "$RESET" "$1"; }
+bad()  { printf "  %b✗%b %s\n" "$RED" "$RESET" "$1"; failed=$((failed + 1)); }
+
+ZERO=0000000000000000000000000000000000000000
+
+# Диапазон пуша нужен, чтобы понять, менялась ли оболочка. Веток пушится
+# обычно одна; если их несколько, берём базу последней — проверка версии
+# кэша от этого может только ужесточиться, а не ослабнуть.
+base=""
+pushing=0
+while read -r local_ref local_sha remote_ref remote_sha; do
+  [ "$local_sha" = "$ZERO" ] && continue   # удаление ветки — проверять нечего
+  pushing=1
+  [ "$remote_sha" != "$ZERO" ] && base="$remote_sha"
+done
+[ "$pushing" = 0 ] && exit 0
+
+say "\n${BOLD}Проверки перед публикацией${RESET}"
+
+# ---------------------------------------------------------------------------
+# 1. docs/NN/ собран из текущего app/
+#
+# Браузерные тесты собирают фикстуру в .tmp и в docs/ не заглядывают вообще.
+# Значит, забытый build_client.py даёт полностью зелёный прогон и публикацию
+# прошлой версии оболочки — расхождение, которое ничем больше не видно.
+# Сверяем настоящим генератором, а не повторением его логики: копия логики
+# разошлась бы с ним при первой же правке.
+# ---------------------------------------------------------------------------
+say "\n${DIM}сборка${RESET}"
+
+tmp=$(mktemp -d) || exit 1
+mkdir -p "$tmp/app"
+cp -R app/. "$tmp/app/"
+for config in clients/*/client.json; do
+  [ -e "$config" ] || continue
+  mkdir -p "$tmp/$(dirname "$config")"
+  cp "$config" "$tmp/$config"
+done
+
+if ! python tools/build_client.py --all --root "$tmp" >/dev/null 2>&1; then
+  bad "контрольная сборка не прошла — python tools/build_client.py --all"
+else
+  stale=""
+  for built in "$tmp"/docs/*/; do
+    id=$(basename "$built")
+    # data/ исключается намеренно: её пишет конвертер, генератор её не трогает.
+    if ! diff -r -x data "docs/$id" "$built" >/dev/null 2>&1; then
+      stale="$stale $id"
+    fi
+  done
+  if [ -n "$stale" ]; then
+    bad "docs/ отстал от app/ у клиентов:$stale"
+    say "    ${DIM}почините: python tools/build_client.py --all${RESET}"
+  else
+    good "docs/ совпадает с app/"
+  fi
+fi
+rm -rf "$tmp"
+
+# ---------------------------------------------------------------------------
+# 2. APP_CACHE_VERSION поднят, если оболочка менялась
+#
+# Без подъёма версии установленный клиент останется на старой оболочке и
+# исправления не увидит — молча и неограниченно долго.
+# ---------------------------------------------------------------------------
+version_of() { sed -n 's/^const APP_CACHE_VERSION = "\(.*\)";.*/\1/p'; }
+
+if [ -z "$base" ]; then
+  say "  ${DIM}·${RESET} версия кэша: ветки ещё нет на сервере, сравнивать не с чем"
+elif git diff --quiet "$base" HEAD -- app/ 2>/dev/null; then
+  good "оболочка не менялась, версия кэша не нужна"
+else
+  was=$(git show "$base:app/sw.js" 2>/dev/null | version_of)
+  now=$(version_of < app/sw.js)
+  if [ -z "$now" ]; then
+    bad "APP_CACHE_VERSION не найден в app/sw.js"
+  elif [ "$was" = "$now" ]; then
+    bad "app/ изменился, а APP_CACHE_VERSION остался $now"
+    say "    ${DIM}поднимите версию в app/sw.js и пересоберите: --all${RESET}"
+  else
+    good "APP_CACHE_VERSION поднят: ${was:-?} → $now"
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# 3. Тесты
+#
+# Все, кроме test_live.mjs: он проверяет уже опубликованное. Порядок — от
+# быстрых к медленным, чтобы очевидная поломка находилась за секунды.
+# ---------------------------------------------------------------------------
+say "\n${DIM}тесты${RESET}"
+
+run() {
+  name=$1
+  shift
+  if "$@" >/dev/null 2>&1; then
+    good "$name"
+  else
+    bad "$name — запустите вручную: $*"
+  fi
+}
+
+run "конфиг клиента"     python tests/test_client_config.py
+run "генератор сборок"   python tests/test_build_client.py
+run "даты, 11 поясов"    node   tests/test_dates.mjs --all-zones
+run "идентификатор"      node   tests/test_client_id.mjs
+run "изоляция клиентов"  node   tests/test_clients.mjs
+run "конвертер"          python tests/test_converter.py
+run "приложение"         node   tests/test_app.mjs
+
+if [ "$failed" -gt 0 ]; then
+  say "\n${RED}${BOLD}✗ публикация остановлена: провалено $failed${RESET}"
+  say "${DIM}Это уйдёт клиенту на боевой адрес. Почините или --no-verify.${RESET}\n"
+  exit 1
+fi
+
+say "\n${GREEN}${BOLD}✓ можно публиковать${RESET}\n"
+exit 0

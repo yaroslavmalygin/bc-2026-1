@@ -82,9 +82,12 @@ def write_manifest(app_dir, out_dir, client_id):
 
     # id первым ключом — так его видно в диффе сразу.
     ordered = {"id": manifest.pop("id"), **manifest}
+    # newline="\n" обязателен: без него Python на Windows пишет CRLF, а гит
+    # хранит файл в LF. Сборка переставала бы совпадать сама с собой после
+    # любого checkout — и pre-push требовал бы пересборки на ровном месте.
     (out_dir / "manifest.webmanifest").write_text(
         json.dumps(ordered, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8")
+        encoding="utf-8", newline="\n")
 
 
 def known_clients(root):
